@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data & Models
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/candidates/*
+!data/candidates/.gitkeep
+models/*
+!models/.gitkeep
+experiments/*
+!experiments/.gitkeep
+submissions/*
+!submissions/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Antigravity / Agent
+.gemini/
+scratch/
