@@ -8,9 +8,17 @@ An end-to-end, modular, and competition-ready machine learning pipeline for **Mu
 
 In this challenge, **Source 1** serves as the primary reference entity database. The objective is to identify and resolve matching business entities across **Source 2** and **Source 3** for every entity in Source 1.
 
-The official evaluation metric is **Entity-Level $F_{0.5}$** (which weights precision more heavily than recall):
+The official evaluation metric is **Entity-Level Macro $F_{0.5}$** (which weights precision more heavily than recall):
 
-$$F_{0.5} = (1 + 0.5^2) \times \frac{\text{Precision} \times \text{Recall}}{0.5^2 \times \text{Precision} + \text{Recall}} = 1.25 \times \frac{\text{Precision} \times \text{Recall}}{0.25 \times \text{Precision} + \text{Recall}}$$
+$$F_{\beta} = (1 + \beta^2) \times \frac{\text{Precision} \times \text{Recall}}{\beta^2 \times \text{Precision} + \text{Recall}} \quad (\text{where } \beta = 0.5)$$
+
+$$F_{0.5} = 1.25 \times \frac{\text{Precision} \times \text{Recall}}{0.25 \times \text{Precision} + \text{Recall}}$$
+
+### Key Entity Matching Characteristics:
+- **Zero Matches**: An entity in Source 1 may have no corresponding matches in Source 2 or Source 3.
+- **Single Match**: An entity may match exactly one record in Source 2 or Source 3.
+- **Multiple Matches**: An entity may match multiple records across Source 2 and Source 3.
+- **Macro-Averaging**: Precision, Recall, and $F_{0.5}$ are computed *per Source 1 entity* and averaged uniformly across all Source 1 entities.
 
 ---
 
@@ -19,27 +27,27 @@ $$F_{0.5} = (1 + 0.5^2) \times \frac{\text{Precision} \times \text{Recall}}{0.5^
 The system executes a strictly decoupled 6-stage pipeline:
 
 ```
-[Raw Tables: Source 1, Source 2, Source 3, (train_matches)]
+[Raw TSV/CSV: Source 1, Source 2, Source 3, (train_matches)]
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Stage 1: Data Ingestion & Normalization                    │
-│   • DataLoader (src/data/loader.py)                         │
+│   • SchemaAdapter & DataLoader (src/data/loader.py)         │
 │   • DataNormalizer (src/data/normalizer.py)                 │
 └─────────────────────────┬───────────────────────────────────┘
-                          │ Clean normalized tables
+                          │ Standardized internal DataFrames
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Stage 2: Candidate Generation (Blocking)                   │
 │   • CandidateGenerator (src/blocking/candidate_gen.py)      │
-│   • candidate_map adapter & sparsity logging                │
+│   • candidate_map adapter & candidate sparsity tracking     │
 └─────────────────────────┬───────────────────────────────────┘
                           │ Candidate pairs / triplets
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Stage 3: Pairwise Feature Extraction                       │
 │   • FeatureExtractor (src/features/pairwise.py)             │
-│   • Text similarity metrics (Jaccard, Levenshtein, etc.)    │
+│   • Multi-field similarity (Jaccard, Levenshtein, TF-IDF)   │
 └─────────────────────────┬───────────────────────────────────┘
                           │ Feature matrix X
                           ▼
@@ -53,7 +61,8 @@ The system executes a strictly decoupled 6-stage pipeline:
 ┌─────────────────────────────────────────────────────────────┐
 │ Stage 5: Entity-Level Decision Resolution                  │
 │   • EntityResolver (src/decision/entity_resolver.py)        │
-│   • Configurable match threshold & candidate subset check   │
+│   • 0, 1, or Multi-Match resolution per S1 entity           │
+│   • Source-specific thresholds & candidate-subset checks    │
 └─────────────────────────┬───────────────────────────────────┘
                           │ Resolved match assignments
                           ▼
@@ -71,38 +80,101 @@ output/matching_results.tsv      output/candidate_pairs.tsv
 
 ---
 
-## 📂 Repository Contents & Module Uses
+## 🧪 Competition Validation Harness & Experiment Tracking
+
+The repository includes a validation harness to answer: **"Did this change actually improve our Amazon ML Challenge score?"**
+
+```
+┌────────────────────────────────────────────────────────┐
+│               Validation Harness Run                   │
+│  python scripts/evaluate.py --synthetic --threshold 0.5│
+└───────────────────────────┬────────────────────────────┘
+                            │
+        ┌───────────────────┴───────────────────┐
+        ▼                                       ▼
+ terminal report & diffs              experiments/<exp_id>/
+ • DATA summary                       • report.json (Full diagnostic)
+ • BLOCKING efficiency                • summary.json (Params + metrics)
+ • MATCHING cardinality               • validation.log
+ • METRICS (Macro F0.5, P, R)
+ • ERROR ANALYSIS (FP, FN, Missed)
+```
+
+### 1. Run Validation
+```bash
+# Run on built-in synthetic benchmark
+python scripts/evaluate.py --synthetic --experiment-id baseline_exp
+
+# Run with custom threshold override
+python scripts/evaluate.py --synthetic --threshold 0.65 --experiment-id strict_exp
+
+# Run on actual training split / dataset
+python scripts/evaluate.py --config configs/default_config.yaml --threshold 0.5
+```
+
+### 2. Compare Two Experiments
+Compare two validation runs side-by-side with metric deltas and an automated verdict:
+```bash
+python scripts/evaluate.py --compare experiments/baseline_exp/report.json experiments/strict_exp/report.json
+```
+
+**Example Comparison Table:**
+```text
+======================================================
+  EXPERIMENT COMPARISON
+======================================================
+  Experiment A : baseline_exp
+  Experiment B : strict_exp
+------------------------------------------------------
+  Metric                            A         B  Delta(A-B)
+  ----------------------------------------------------
+  Macro F0.5 (HEADLINE)        0.0828    0.1667  - -0.0839
+  Macro Precision              0.0677    0.1667  - -0.0990
+  Macro Recall                 0.8333    0.1667  + +0.6667
+  Exact match rate             0.0000    0.1667  - -0.1667
+  Blocking recall              1.0000    1.0000  = 0.0000
+  Mean cands/entity           16.0000   16.0000  = 0.0000
+======================================================
+
+  Verdict (by macro F0.5): B is BETTER
+```
+
+---
+
+## 📂 Repository Structure & Module Overview
 
 ```text
 Amazon 2026/
 ├── configs/
-│   └── default_config.yaml         # Central pipeline configuration (paths, blocking, features, models, thresholds)
+│   └── default_config.yaml         # Central configuration (paths, blocking, features, models, thresholds)
 ├── data/
-│   ├── raw/                        # Place raw source CSV/Parquet files here (source1, source2, source3, train_matches)
+│   ├── raw/                        # Raw source TSV/CSV files (source1, source2, source3, train_matches)
 │   ├── processed/                  # Cached intermediate normalized datasets
 │   └── candidates/                 # Cached candidate pair artifacts
-├── experiments/                    # Experiment tracking logs, parameters, and metric summaries
-├── models/                         # Saved model checkpoints and weights
-├── output/                         # Competition output TSVs (matching_results.tsv, candidate_pairs.tsv)
-├── submissions/                    # Alternative destination for submission packages
+├── experiments/                    # Run directories containing report.json, summary.json, and validation.log
+├── models/                         # Trained model artifacts and weights
+├── output/                         # Submission TSVs (matching_results.tsv, candidate_pairs.tsv)
+├── submissions/                    # Packaged submission archive storage
+├── scripts/
+│   └── evaluate.py                 # Validation CLI & experiment comparison tool
 ├── src/
-│   ├── __init__.py                 # Package exports (EntityResolutionPipeline, run_inference)
+│   ├── __init__.py                 # Core package exports
 │   ├── pipeline.py                 # Master 6-stage orchestrator (EntityResolutionPipeline)
-│   ├── predict.py                  # Standalone inference & submission generation module
-│   ├── submission.py               # Output generation layer with pre-write validation & official validator runner
+│   ├── predict.py                  # Standalone inference module for test sets
+│   ├── submission.py               # Submission generation with strict pre-write checks & validation
 │   ├── blocking/
 │   │   ├── __init__.py
-│   │   └── candidate_gen.py        # Candidate pair blocking via similarity / nearest neighbors
+│   │   └── candidate_gen.py        # Candidate blocking (TF-IDF, nearest neighbors, Top-K)
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── loader.py               # Ingestion for CSV, Parquet, and JSON/JSONL formats
-│   │   └── normalizer.py           # Text cleaning, lowercase conversion, punctuation & whitespace cleanup
+│   │   ├── loader.py               # TSV/CSV ingestion with schema adapter
+│   │   └── normalizer.py           # Text cleaning, abbreviation expansion, address standardisation
 │   ├── decision/
 │   │   ├── __init__.py
-│   │   └── entity_resolver.py      # Thresholding and entity-level match selection
+│   │   └── entity_resolver.py      # Multi-match entity resolver (0, 1, or Many matches per S1)
 │   ├── evaluation/
 │   │   ├── __init__.py
-│   │   └── metrics.py              # Entity-level Precision, Recall, and F_0.5 metric computation
+│   │   └── metrics.py              # Macro F_0.5, Macro Precision, Macro Recall computation
 │   ├── features/
 │   │   ├── __init__.py
 │   │   └── pairwise.py             # Pairwise similarity feature extraction
@@ -110,15 +182,21 @@ Amazon 2026/
 │   │   ├── __init__.py
 │   │   ├── trainer.py              # GBDT training wrapper (CatBoost / LightGBM)
 │   │   └── predict.py              # Match probability prediction wrapper
-│   └── utils/
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── config.py               # YAML config loader
+│   │   ├── logger.py               # Formatted stdout & file logging
+│   │   └── tracker.py              # ExperimentTracker for parameter & metric persistence
+│   └── validation/
 │       ├── __init__.py
-│       ├── config.py               # YAML config loader
-│       ├── logger.py               # Formatted stdout & file logging
-│       └── tracker.py              # Experiment tracking & summary JSON persistence
+│       └── harness.py              # ValidationHarness & ValidationReport engine
 ├── tests/
 │   ├── __init__.py
-│   ├── test_pipeline.py            # Integration tests (end-to-end pipeline, thresholding, predict CLI)
-│   └── test_submission.py          # Submission layer unit tests (coverage, subset constraint, formatting)
+│   ├── test_pipeline.py            # Pipeline integration & inference tests
+│   ├── test_submission.py          # Submission constraints & formatting tests
+│   ├── test_evaluation.py          # Entity-level metric & edge-case unit tests
+│   ├── test_competition_er.py      # 55 deterministic noisy ER entity test cases
+│   └── test_evaluate_harness.py    # 46 validation harness unit & CLI tests
 ├── utils/
 │   ├── __init__.py
 │   └── validate_submission.py      # Official competition validator script
@@ -131,17 +209,18 @@ Amazon 2026/
 
 | Module / File | Responsibility & Use |
 |---|---|
-| [`src/pipeline.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/pipeline.py) | **Central Orchestrator**: Executes the 6 stages, manages adapters, logs candidate counts/sparsity, computes validation metrics, and produces validated TSV files. |
-| [`src/predict.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/predict.py) | **Test Inference Interface**: Standalone CLI and programmatic function for fast prediction on test sets. |
-| [`src/submission.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/submission.py) | **Submission Layer**: Formats and exports `matching_results.tsv` and `candidate_pairs.tsv` with pre-write constraint verification and validation wrapper. |
-| [`src/data/loader.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/data/loader.py) | **Data Loader**: Safely loads Source 1, 2, 3, and ground truth files across CSV, Parquet, and JSON formats. |
-| [`src/data/normalizer.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/data/normalizer.py) | **Text Normalizer**: Cleans string fields (lowercasing, symbol removal, whitespace normalization) for robust matching. |
+| [`src/pipeline.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/pipeline.py) | **Central Orchestrator**: Executes the 6 stages, manages adapters, tracks candidate sparsity, computes validation metrics, and produces validated TSV files. |
+| [`scripts/evaluate.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/scripts/evaluate.py) | **Validation CLI**: Command-line tool to run validation, inspect error diagnostics, and compare experiments. |
+| [`src/validation/harness.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/validation/harness.py) | **Validation Engine**: Computes comprehensive Data, Blocking, Matching, Metric, and Error Analysis sections and serialises JSON reports. |
+| [`src/decision/entity_resolver.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/decision/entity_resolver.py) | **Multi-Match Resolver**: Resolves candidate probabilities into 0, 1, or Many match assignments per Source 1 entity with source-specific thresholds and margin filtering. |
+| [`src/evaluation/metrics.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/evaluation/metrics.py) | **Competition Metrics**: Calculates exact per-entity Macro Precision, Macro Recall, and Macro $F_{0.5}$. |
+| [`src/data/loader.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/data/loader.py) | **Data Loader**: Safely loads TSV/CSV files with schema translation (`entity_id, business_name, business_address, country`). |
+| [`src/data/normalizer.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/data/normalizer.py) | **Text Normalizer**: Cleans string fields (lowercasing, punctuation stripping, whitespace normalization). |
 | [`src/blocking/candidate_gen.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/blocking/candidate_gen.py) | **Candidate Generator**: Generates candidate pairs per Source 1 entity to reduce $O(N^2)$ search space. |
 | [`src/features/pairwise.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/features/pairwise.py) | **Feature Extractor**: Computes multi-field similarity scores between Source 1 and candidate records. |
-| [`src/modeling/trainer.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/modeling/trainer.py) | **Model Trainer**: Trains CatBoost / LightGBM binary classifiers on feature vectors with CV support. |
+| [`src/modeling/trainer.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/modeling/trainer.py) | **Model Trainer**: Trains CatBoost / LightGBM / XGBoost binary classifiers on feature vectors with CV. |
 | [`src/modeling/predict.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/modeling/predict.py) | **Model Predictor**: Generates probability scores for each candidate pair. |
-| [`src/decision/entity_resolver.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/decision/entity_resolver.py) | **Decision Layer**: Applies configurable thresholds and selects optimal entity match assignments. |
-| [`src/evaluation/metrics.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/evaluation/metrics.py) | **Evaluation Layer**: Calculates exact Entity-level Precision, Recall, and $F_{0.5}$ against ground truth. |
+| [`src/submission.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/submission.py) | **Submission Layer**: Formats and exports TSVs with pre-write constraint verification and validation wrapper. |
 | [`src/utils/tracker.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/src/utils/tracker.py) | **Experiment Tracker**: Persists run configurations, timestamps, logs, and metric JSON files to `experiments/`. |
 | [`utils/validate_submission.py`](file:///c:/Users/Ansh%20jaiswal/OneDrive/Desktop/Amazon%202026/utils/validate_submission.py) | **Official Validator**: Authoritative competition validator enforcing all submission format constraints. |
 
@@ -154,9 +233,9 @@ All generated outputs strictly satisfy the official requirements:
 1. **Required Files**:
    - `output/matching_results.tsv` (`source1_entity_id \t matched_entity_ids`)
    - `output/candidate_pairs.tsv` (`source1_entity_id \t candidate_entity_ids`)
-2. **Coverage**: Exactly one row for every Source 1 test entity.
+2. **Complete Coverage**: Exactly one row for every Source 1 test entity.
 3. **Subset Constraint**: Matched IDs must be a strict subset of candidate IDs (`matched_entity_ids ⊆ candidate_entity_ids`).
-4. **Valid Targets**: Only Source 2 and Source 3 entity IDs are permitted.
+4. **Valid Target IDs**: Only Source 2 and Source 3 entity IDs are permitted.
 5. **No Duplicates**: No repeated IDs within any comma-separated ID list.
 6. **Pure TSV Formatting**: Tab-separated without quotes or encoding corruption.
 
@@ -192,7 +271,19 @@ To generate predictions directly on test datasets:
 python -m src.predict --config configs/default_config.yaml --threshold 0.5 --output-dir output
 ```
 
-### 4. Run Official Validation
+### 4. Run Validation & Error Analysis
+
+Run the competition validation harness:
+
+```bash
+# Evaluate on synthetic benchmark
+python scripts/evaluate.py --synthetic --experiment-id baseline_run
+
+# Compare two experiment runs
+python scripts/evaluate.py --compare experiments/exp1/report.json experiments/exp2/report.json
+```
+
+### 5. Run Official Submission Validation
 
 Directly validate submission files using the competition validator:
 
@@ -200,12 +291,12 @@ Directly validate submission files using the competition validator:
 python utils/validate_submission.py --matching-results output/matching_results.tsv --candidate-pairs output/candidate_pairs.tsv
 ```
 
-### 5. Run Automated Tests
+### 6. Run Automated Tests
 
-Execute all 25 unit and integration tests covering submission rules, edge cases, threshold sensitivity, and pipeline flow:
+Execute the complete test suite (185 tests covering submission formatting, edge cases, metric calculations, synthetic datasets, and validation harness):
 
 ```bash
-python -m unittest discover tests -v
+pytest tests/ -v
 ```
 
 ---
@@ -227,18 +318,18 @@ paths:
   submissions_dir: "output"
 
 data:
-  source1_filename: "source1.csv"
-  source2_filename: "source2.csv"
-  source3_filename: "source3.csv"
-  train_matches_filename: "train_matches.csv"
-  id_column_s1: "s1_id"
-  id_column_s2: "s2_id"
-  id_column_s3: "s3_id"
+  source1_filename: "source1.tsv"
+  source2_filename: "source2.tsv"
+  source3_filename: "source3.tsv"
+  train_matches_filename: "train_matches.tsv"
+  id_column_s1: "source1_entity_id"
+  id_column_s2: "source2_entity_id"
+  id_column_s3: "source3_entity_id"
 
 blocking:
   top_k: 20
   min_similarity_threshold: 0.1
-  blocking_fields: ["name", "address", "phone"]
+  blocking_fields: ["business_name", "business_address", "country"]
 
 features:
   string_similarity_metrics: ["levenshtein", "jaccard", "cosine_tfidf"]
@@ -258,7 +349,10 @@ evaluation:
 
 decision:
   threshold: 0.5
-  enforce_one_to_one: false
+  threshold_s2: 0.5
+  threshold_s3: 0.5
+  top_margin: null
+  max_matches_per_entity: null
 
 submission:
   matching_filename: "matching_results.tsv"
