@@ -12,6 +12,17 @@ def _as_float_array(values):
     return arr[np.isfinite(arr)]
 
 
+def _f05_score(precision: float, recall: float) -> float:
+    if precision == 0.0 and recall == 0.0:
+        return 0.0
+    beta_sq = 0.5 ** 2
+    numerator = (1.0 + beta_sq) * precision * recall
+    denominator = beta_sq * precision + recall
+    if denominator == 0.0:
+        return 0.0
+    return float(numerator / denominator)
+
+
 def choose_threshold(
     labels: Iterable[int | float | bool] | None,
     probabilities: Iterable[float] | None,
@@ -19,11 +30,10 @@ def choose_threshold(
     threshold_candidates: Iterable[float] | None = None,
     positive_label: int | float | bool = 1,
 ):
-    """Choose a probability threshold for binary matching decisions.
+    """Choose a probability threshold optimized for the competition's F_0.5 metric.
 
-    If labels are provided, the threshold is selected by maximizing the F1 score.
-    When two thresholds tie, the one closest to 0.5 is chosen to avoid overly
-    aggressive merges while still preserving legitimate matches.
+    Because the challenge penalizes false merges more heavily than missed matches,
+    this function maximizes precision-heavy F_0.5 instead of F1.
     """
     if labels is None or probabilities is None:
         return 0.5
@@ -54,14 +64,11 @@ def choose_threshold(
 
         precision = tp / (tp + fp) if (tp + fp) else 0.0
         recall = tp / (tp + fn) if (tp + fn) else 0.0
-        if precision == 0.0 and recall == 0.0:
-            f1 = 0.0
-        else:
-            f1 = 2.0 * precision * recall / (precision + recall)
+        score = _f05_score(precision, recall)
 
         tie_break = abs(float(threshold) - 0.5)
-        if f1 > best_score or (np.isclose(f1, best_score) and tie_break < abs(best_threshold - 0.5)):
-            best_score = f1
+        if score > best_score or (np.isclose(score, best_score) and tie_break < abs(best_threshold - 0.5)):
+            best_score = score
             best_threshold = float(threshold)
 
     return float(best_threshold)

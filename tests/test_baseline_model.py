@@ -6,6 +6,7 @@ from business_entity_resolution.src.model import (
     generate_hard_negatives,
     train_baseline_models,
 )
+from business_entity_resolution.src.threshold import choose_threshold
 
 
 def _make_pairs():
@@ -83,6 +84,15 @@ def test_generate_hard_negatives_creates_ambiguous_false_matches():
     assert set(hard_negatives["label"].unique()) == {0}
     assert len(hard_negatives) > 0
     assert {"left_name", "right_name"}.issubset(hard_negatives.columns)
+
+
+def test_threshold_uses_precision_heavy_f05_score():
+    labels = [1, 1, 0, 0]
+    probabilities = [0.95, 0.8, 0.7, 0.2]
+
+    threshold = choose_threshold(labels, probabilities)
+
+    assert 0.7 <= threshold <= 0.9
 
 
 def test_build_pair_features_has_advanced_name_and_address_signals():
