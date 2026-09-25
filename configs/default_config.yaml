@@ -9,21 +9,25 @@ paths:
   candidates_dir: "data/candidates"
   models_dir: "models"
   experiments_dir: "experiments"
-  submissions_dir: "submissions"
+  submissions_dir: "output"
 
 data:
-  source1_filename: "source1.csv"
-  source2_filename: "source2.csv"
-  source3_filename: "source3.csv"
-  train_matches_filename: "train_matches.csv"
-  id_column_s1: "s1_id"
-  id_column_s2: "s2_id"
-  id_column_s3: "s3_id"
+  source1_filename: "source1.tsv"
+  source2_filename: "source2.tsv"
+  source3_filename: "source3.tsv"
+  train_matches_filename: "train_matches.tsv"
+  id_column: "entity_id"
+  id_column_s1: "entity_id"
+  id_column_s2: "entity_id"
+  id_column_s3: "entity_id"
+  name_column: "business_name"
+  address_column: "business_address"
+  country_column: "country"
 
 blocking:
   top_k: 20
   min_similarity_threshold: 0.1
-  blocking_fields: ["name", "address", "phone"]
+  blocking_fields: ["business_name", "business_address", "country"]
 
 features:
   string_similarity_metrics: ["levenshtein", "jaccard", "cosine_tfidf"]
@@ -46,6 +50,7 @@ decision:
   enforce_one_to_one: false
 
 submission:
-  output_filename: "submission.csv"
+  matching_filename: "matching_results.tsv"
+  candidates_filename: "candidate_pairs.tsv"
   enforce_s1_coverage: true
   enforce_candidate_subset: true

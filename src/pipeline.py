@@ -84,11 +84,19 @@ def candidates_df_to_map(
     if candidates_df.empty:
         return candidate_map
 
+    # Determine s1 ID column
+    actual_s1_col = s1_id_col if s1_id_col in candidates_df.columns else (
+        "s1_id" if "s1_id" in candidates_df.columns else "entity_id"
+    )
+
     # Determine target ID columns present in candidates_df
-    possible_target_cols = [c for c in ["s2_id", "s3_id", "target_id", "candidate_id"] if c in candidates_df.columns]
+    possible_target_cols = [
+        c for c in ["s2_id", "s3_id", "target_id", "candidate_id", "matched_id"]
+        if c in candidates_df.columns
+    ]
 
     for _, row in candidates_df.iterrows():
-        s1_id = str(row.get(s1_id_col, "")).strip().strip("\"'")
+        s1_id = str(row.get(actual_s1_col, "")).strip().strip("\"'")
         if not s1_id:
             continue
         if s1_id not in candidate_map:
@@ -124,10 +132,17 @@ def resolved_df_to_map(
     if resolved_df.empty:
         return match_map
 
-    possible_target_cols = [c for c in ["s2_id", "s3_id", "target_id", "matched_id"] if c in resolved_df.columns]
+    actual_s1_col = s1_id_col if s1_id_col in resolved_df.columns else (
+        "s1_id" if "s1_id" in resolved_df.columns else "entity_id"
+    )
+
+    possible_target_cols = [
+        c for c in ["s2_id", "s3_id", "target_id", "matched_id", "candidate_id"]
+        if c in resolved_df.columns
+    ]
 
     for _, row in resolved_df.iterrows():
-        s1_id = str(row.get(s1_id_col, "")).strip().strip("\"'")
+        s1_id = str(row.get(actual_s1_col, "")).strip().strip("\"'")
         if not s1_id:
             continue
         if s1_id not in match_map:
@@ -218,7 +233,9 @@ class EntityResolutionPipeline:
         self.normalizer = DataNormalizer()
         
         top_k = self.config.get("blocking", {}).get("top_k", 20)
-        blocking_fields = self.config.get("blocking", {}).get("blocking_fields", ["name", "address", "phone"])
+        blocking_fields = self.config.get("blocking", {}).get(
+            "blocking_fields", ["business_name", "business_address", "country"]
+        )
         self.candidate_generator = CandidateGenerator(top_k=top_k, blocking_fields=blocking_fields)
         
         self.feature_extractor = FeatureExtractor()
@@ -246,15 +263,22 @@ class EntityResolutionPipeline:
                 "submissions_dir": "output",
             },
             "data": {
-                "source1_filename": "source1.csv",
-                "source2_filename": "source2.csv",
-                "source3_filename": "source3.csv",
-                "train_matches_filename": "train_matches.csv",
-                "id_column_s1": "s1_id",
-                "id_column_s2": "s2_id",
-                "id_column_s3": "s3_id",
+                "source1_filename": "source1.tsv",
+                "source2_filename": "source2.tsv",
+                "source3_filename": "source3.tsv",
+                "train_matches_filename": "train_matches.tsv",
+                "id_column": "entity_id",
+                "id_column_s1": "entity_id",
+                "id_column_s2": "entity_id",
+                "id_column_s3": "entity_id",
+                "name_column": "business_name",
+                "address_column": "business_address",
+                "country_column": "country",
             },
-            "blocking": {"top_k": 20, "blocking_fields": ["name", "address", "phone"]},
+            "blocking": {
+                "top_k": 20,
+                "blocking_fields": ["business_name", "business_address", "country"],
+            },
             "features": {"string_similarity_metrics": ["levenshtein", "jaccard", "cosine_tfidf"]},
             "modeling": {"model_type": "catboost", "params": {"random_seed": 42}},
             "evaluation": {"beta": 0.5},
@@ -287,13 +311,30 @@ class EntityResolutionPipeline:
         if s1_df is None or s2_df is None or s3_df is None:
             s1_df, s2_df, s3_df, train_matches = self.data_loader.load_sources(self.config)
 
-        id_s1 = self.config["data"]["id_column_s1"]
-        id_s2 = self.config["data"]["id_column_s2"]
-        id_s3 = self.config["data"]["id_column_s3"]
+        data_cfg = self.config.get("data", {})
+        
+        # Dynamic ID column resolution (canonical 'entity_id' or configured / legacy aliases)
+        id_s1 = data_cfg.get("id_column_s1", "entity_id")
+        if id_s1 not in s1_df.columns and "entity_id" in s1_df.columns:
+            id_s1 = "entity_id"
+        elif id_s1 not in s1_df.columns and "s1_id" in s1_df.columns:
+            id_s1 = "s1_id"
 
-        all_s1_ids = s1_df[id_s1].astype(str).tolist() if not s1_df.empty and id_s1 in s1_df.columns else []
-        valid_s2_ids = set(s2_df[id_s2].astype(str).dropna().tolist()) if not s2_df.empty and id_s2 in s2_df.columns else set()
-        valid_s3_ids = set(s3_df[id_s3].astype(str).dropna().tolist()) if not s3_df.empty and id_s3 in s3_df.columns else set()
+        id_s2 = data_cfg.get("id_column_s2", "entity_id")
+        if id_s2 not in s2_df.columns and "entity_id" in s2_df.columns:
+            id_s2 = "entity_id"
+        elif id_s2 not in s2_df.columns and "s2_id" in s2_df.columns:
+            id_s2 = "s2_id"
+
+        id_s3 = data_cfg.get("id_column_s3", "entity_id")
+        if id_s3 not in s3_df.columns and "entity_id" in s3_df.columns:
+            id_s3 = "entity_id"
+        elif id_s3 not in s3_df.columns and "s3_id" in s3_df.columns:
+            id_s3 = "s3_id"
+
+        all_s1_ids = s1_df[id_s1].astype(str).str.strip().tolist() if not s1_df.empty and id_s1 in s1_df.columns else []
+        valid_s2_ids = set(s2_df[id_s2].astype(str).str.strip().dropna().tolist()) if not s2_df.empty and id_s2 in s2_df.columns else set()
+        valid_s3_ids = set(s3_df[id_s3].astype(str).str.strip().dropna().tolist()) if not s3_df.empty and id_s3 in s3_df.columns else set()
         valid_target_ids = valid_s2_ids.union(valid_s3_ids)
 
         self.logger.info(
@@ -303,7 +344,9 @@ class EntityResolutionPipeline:
             self.logger.info(f"Loaded ground truth matches: {len(train_matches)} rows")
 
         # Normalization
-        text_cols = self.config.get("blocking", {}).get("blocking_fields", ["name", "address", "phone"])
+        text_cols = self.config.get("blocking", {}).get(
+            "blocking_fields", ["business_name", "business_address", "country", "name", "address"]
+        )
         s1_norm = self.normalizer.normalize_dataframe(s1_df, text_columns=text_cols)
         s2_norm = self.normalizer.normalize_dataframe(s2_df, text_columns=text_cols)
         s3_norm = self.normalizer.normalize_dataframe(s3_df, text_columns=text_cols)
@@ -337,7 +380,7 @@ class EntityResolutionPipeline:
         candidate_map = candidates_df_to_map(
             candidates_df,
             all_s1_ids=all_s1_ids,
-            s1_id_col=self.config["data"]["id_column_s1"],
+            s1_id_col=self.config.get("data", {}).get("id_column_s1", "s1_id"),
             valid_target_ids=valid_target_ids,
         )
 
@@ -449,7 +492,7 @@ class EntityResolutionPipeline:
             resolved_df=resolved_df,
             all_s1_ids=all_s1_ids,
             candidate_map=candidate_map,
-            s1_id_col=self.config["data"]["id_column_s1"],
+            s1_id_col=self.config.get("data", {}).get("id_column_s1", "s1_id"),
             valid_target_ids=valid_target_ids,
         )
 
@@ -488,17 +531,32 @@ class EntityResolutionPipeline:
         eval_metrics: Dict[str, float] = {}
         if train_matches is not None and not train_matches.empty:
             self.logger.info("Computing validation / training F_0.5 metrics...")
-            id_s1 = self.config["data"]["id_column_s1"]
-            id_s2 = self.config["data"]["id_column_s2"]
-            id_s3 = self.config["data"]["id_column_s3"]
-
+            data_cfg = self.config.get("data", {})
             y_true: Dict[str, Tuple[str, str]] = {}
-            for _, row in train_matches.iterrows():
-                s1_v = str(row[id_s1]) if id_s1 in row else ""
-                s2_v = str(row[id_s2]) if id_s2 in row and pd.notna(row[id_s2]) else ""
-                s3_v = str(row[id_s3]) if id_s3 in row and pd.notna(row[id_s3]) else ""
-                if s1_v:
+
+            # Support both competition schema (source1_entity_id, matched_entity_ids)
+            # and triplet schema (s1_id, s2_id, s3_id)
+            if "source1_entity_id" in train_matches.columns:
+                for _, row in train_matches.iterrows():
+                    s1_v = str(row["source1_entity_id"]).strip()
+                    if not s1_v:
+                        continue
+                    matched_raw = str(row.get("matched_entity_ids", "")).strip()
+                    targets = [x.strip() for x in matched_raw.split(",") if x.strip()]
+                    s2_v = targets[0] if len(targets) > 0 else ""
+                    s3_v = targets[1] if len(targets) > 1 else ""
                     y_true[s1_v] = (s2_v, s3_v)
+            else:
+                id_s1 = data_cfg.get("id_column_s1", "s1_id") if data_cfg.get("id_column_s1") in train_matches.columns else ("s1_id" if "s1_id" in train_matches.columns else "entity_id")
+                id_s2 = data_cfg.get("id_column_s2", "s2_id") if data_cfg.get("id_column_s2") in train_matches.columns else ("s2_id" if "s2_id" in train_matches.columns else "")
+                id_s3 = data_cfg.get("id_column_s3", "s3_id") if data_cfg.get("id_column_s3") in train_matches.columns else ("s3_id" if "s3_id" in train_matches.columns else "")
+
+                for _, row in train_matches.iterrows():
+                    s1_v = str(row[id_s1]).strip() if id_s1 in row else ""
+                    s2_v = str(row[id_s2]).strip() if id_s2 and id_s2 in row and pd.notna(row[id_s2]) else ""
+                    s3_v = str(row[id_s3]).strip() if id_s3 and id_s3 in row and pd.notna(row[id_s3]) else ""
+                    if s1_v:
+                        y_true[s1_v] = (s2_v, s3_v)
 
             # Format predictions
             y_pred: Dict[str, Tuple[str, str]] = {}
