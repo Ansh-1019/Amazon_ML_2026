@@ -22,7 +22,7 @@ class DataNormalizer:
         Standard text cleaning:
           - Converts to string and handles nulls/empty values
           - Lowercase transformation
-          - Strips non-alphanumeric punctuation while preserving Unicode words (\w)
+          - Strips non-alphanumeric punctuation while preserving Unicode words (\\w)
           - Collapses multiple whitespace characters to a single space
         """
         if text is None or not isinstance(text, str):
