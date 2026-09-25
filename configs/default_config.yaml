@@ -46,7 +46,10 @@ evaluation:
   beta: 0.5
 
 decision:
-  threshold: 0.5
+  threshold: 0.5          # Global minimum score to accept a candidate as a match
+  threshold_s2: null      # Optional Source 2-specific threshold (overrides global)
+  threshold_s3: null      # Optional Source 3-specific threshold (overrides global)
+  top_margin: null        # Optional: drop candidates > margin below entity's best score
   enforce_one_to_one: false
 
 submission:

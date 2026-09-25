@@ -241,8 +241,13 @@ class EntityResolutionPipeline:
         self.feature_extractor = FeatureExtractor()
         self.model = model
         
-        threshold = self.config.get("decision", {}).get("threshold", 0.5)
-        self.resolver = EntityResolver(threshold=threshold)
+        dec_cfg = self.config.get("decision", {})
+        self.resolver = EntityResolver(
+            threshold=dec_cfg.get("threshold", 0.5),
+            threshold_s2=dec_cfg.get("threshold_s2", None),
+            threshold_s3=dec_cfg.get("threshold_s3", None),
+            top_margin=dec_cfg.get("top_margin", None),
+        )
         
         beta = self.config.get("evaluation", {}).get("beta", 0.5)
         self.evaluator = EntityEvaluator(beta=beta)
@@ -282,7 +287,12 @@ class EntityResolutionPipeline:
             "features": {"string_similarity_metrics": ["levenshtein", "jaccard", "cosine_tfidf"]},
             "modeling": {"model_type": "catboost", "params": {"random_seed": 42}},
             "evaluation": {"beta": 0.5},
-            "decision": {"threshold": 0.5},
+            "decision": {
+                "threshold": 0.5,
+                "threshold_s2": None,
+                "threshold_s3": None,
+                "top_margin": None,
+            },
             "submission": {
                 "matching_filename": "matching_results.tsv",
                 "candidates_filename": "candidate_pairs.tsv",
@@ -481,11 +491,18 @@ class EntityResolutionPipeline:
         self.logger.info("--- Stage 5: Entity-Level Decision Resolution ---")
         start_t = time.time()
 
+        # Build a merged config that injects any threshold override into
+        # the decision sub-dict (EntityResolver.resolve reads threshold from config).
+        effective_config = self.config
         if threshold is not None:
-            self.resolver.threshold = threshold
+            self.resolver.threshold = threshold  # keep instance in sync for logging
+            effective_config = {
+                **self.config,
+                "decision": {**self.config.get("decision", {}), "threshold": threshold},
+            }
 
         self.logger.info(f"Applying decision threshold: {self.resolver.threshold}")
-        resolved_df = self.resolver.resolve(scored_candidates_df, self.config)
+        resolved_df = self.resolver.resolve(scored_candidates_df, effective_config)
 
         # Build match map
         match_map = resolved_df_to_map(
@@ -532,40 +549,58 @@ class EntityResolutionPipeline:
         if train_matches is not None and not train_matches.empty:
             self.logger.info("Computing validation / training F_0.5 metrics...")
             data_cfg = self.config.get("data", {})
-            y_true: Dict[str, Tuple[str, str]] = {}
+            # y_true: s1_id -> set of ground-truth matched IDs
+            y_true: Dict[str, Set[str]] = {}
 
-            # Support both competition schema (source1_entity_id, matched_entity_ids)
+            # Support competition schema (source1_entity_id, matched_entity_ids)
             # and triplet schema (s1_id, s2_id, s3_id)
             if "source1_entity_id" in train_matches.columns:
                 for _, row in train_matches.iterrows():
                     s1_v = str(row["source1_entity_id"]).strip()
-                    if not s1_v:
+                    if not s1_v or s1_v in ("nan", "None"):
                         continue
                     matched_raw = str(row.get("matched_entity_ids", "")).strip()
-                    targets = [x.strip() for x in matched_raw.split(",") if x.strip()]
-                    s2_v = targets[0] if len(targets) > 0 else ""
-                    s3_v = targets[1] if len(targets) > 1 else ""
-                    y_true[s1_v] = (s2_v, s3_v)
+                    targets = set(
+                        x.strip() for x in matched_raw.split(",")
+                        if x.strip() and x.strip() not in ("nan", "None")
+                    )
+                    y_true[s1_v] = targets
             else:
-                id_s1 = data_cfg.get("id_column_s1", "s1_id") if data_cfg.get("id_column_s1") in train_matches.columns else ("s1_id" if "s1_id" in train_matches.columns else "entity_id")
-                id_s2 = data_cfg.get("id_column_s2", "s2_id") if data_cfg.get("id_column_s2") in train_matches.columns else ("s2_id" if "s2_id" in train_matches.columns else "")
-                id_s3 = data_cfg.get("id_column_s3", "s3_id") if data_cfg.get("id_column_s3") in train_matches.columns else ("s3_id" if "s3_id" in train_matches.columns else "")
-
+                id_s1 = (
+                    data_cfg.get("id_column_s1", "s1_id")
+                    if data_cfg.get("id_column_s1") in train_matches.columns
+                    else ("s1_id" if "s1_id" in train_matches.columns else "entity_id")
+                )
+                id_s2 = (
+                    data_cfg.get("id_column_s2", "s2_id")
+                    if data_cfg.get("id_column_s2") in train_matches.columns
+                    else ("s2_id" if "s2_id" in train_matches.columns else "")
+                )
+                id_s3 = (
+                    data_cfg.get("id_column_s3", "s3_id")
+                    if data_cfg.get("id_column_s3") in train_matches.columns
+                    else ("s3_id" if "s3_id" in train_matches.columns else "")
+                )
                 for _, row in train_matches.iterrows():
                     s1_v = str(row[id_s1]).strip() if id_s1 in row else ""
-                    s2_v = str(row[id_s2]).strip() if id_s2 and id_s2 in row and pd.notna(row[id_s2]) else ""
-                    s3_v = str(row[id_s3]).strip() if id_s3 and id_s3 in row and pd.notna(row[id_s3]) else ""
-                    if s1_v:
-                        y_true[s1_v] = (s2_v, s3_v)
+                    if not s1_v or s1_v in ("nan", "None"):
+                        continue
+                    gt_ids: Set[str] = set()
+                    for id_col in [id_s2, id_s3]:
+                        if id_col and id_col in row and pd.notna(row[id_col]):
+                            val = str(row[id_col]).strip()
+                            if val and val not in ("nan", "None"):
+                                gt_ids.add(val)
+                    y_true[s1_v] = gt_ids
 
-            # Format predictions
-            y_pred: Dict[str, Tuple[str, str]] = {}
-            for s1_v, targets in match_map.items():
-                s2_pred = targets[0] if len(targets) > 0 else ""
-                s3_pred = targets[1] if len(targets) > 1 else ""
-                y_pred[s1_v] = (s2_pred, s3_pred)
+            # y_pred: s1_id -> set of predicted matched IDs (from match_map)
+            y_pred: Dict[str, Set[str]] = {
+                s1_v: set(targets) for s1_v, targets in match_map.items()
+            }
 
-            eval_metrics = self.evaluator.evaluate(y_true, y_pred)
+            eval_metrics = self.evaluator.evaluate(
+                y_true, y_pred, all_s1_ids=all_s1_ids
+            )
             self.tracker.log_metrics(eval_metrics)
 
         # 6b. Submission File Generation
