@@ -208,6 +208,56 @@ def generate_submission_files(
     return matching_file, candidates_file
 
 
+
+# ---------------------------------------------------------------------------
+# Class wrapper for pipeline integration
+# ---------------------------------------------------------------------------
+
+class SubmissionGenerator:
+    """Class interface for generating and validating competition submissions."""
+
+    def __init__(self, output_dir: Union[str, Path] = "output"):
+        self.output_dir = Path(output_dir)
+
+    def generate(
+        self,
+        test_s1_ids: List[str],
+        candidate_pairs_map: Dict[str, List[str]],
+        matched_results_map: Dict[str, List[str]],
+        valid_target_ids: Optional[Set[str]] = None,
+        matching_filename: str = "matching_results.tsv",
+        candidates_filename: str = "candidate_pairs.tsv",
+        strict: bool = True,
+    ) -> Tuple[Path, Path]:
+        """Generates matching_results.tsv and candidate_pairs.tsv."""
+        return generate_submission_files(
+            test_s1_ids=test_s1_ids,
+            candidate_pairs_map=candidate_pairs_map,
+            matched_results_map=matched_results_map,
+            output_dir=self.output_dir,
+            valid_target_ids=valid_target_ids,
+            matching_filename=matching_filename,
+            candidates_filename=candidates_filename,
+            strict=strict,
+        )
+
+    def validate(
+        self,
+        matching_filepath: Union[str, Path] = "output/matching_results.tsv",
+        candidates_filepath: Union[str, Path] = "output/candidate_pairs.tsv",
+        s1_ids_file: Optional[Union[str, Path]] = None,
+        target_ids_file: Optional[Union[str, Path]] = None,
+        validator_script: Union[str, Path] = "utils/validate_submission.py",
+    ) -> Tuple[bool, str]:
+        """Runs the official validator."""
+        return run_official_validator(
+            matching_filepath=matching_filepath,
+            candidates_filepath=candidates_filepath,
+            s1_ids_file=s1_ids_file,
+            target_ids_file=target_ids_file,
+            validator_script=validator_script,
+        )
+
 # ---------------------------------------------------------------------------
 # Official-validator wrapper
 # ---------------------------------------------------------------------------
