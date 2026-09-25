@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,112 @@ from sklearn.metrics import accuracy_score, average_precision_score, log_loss, r
 from sklearn.model_selection import train_test_split
 
 from .features import build_pair_features
+
+
+def _mutate_name(name: Any):
+    if name is None or pd.isna(name):
+        return None
+    text = str(name).strip()
+    if not text:
+        return None
+
+    tokens = text.split()
+    suffix_map = {
+        "corp": "inc",
+        "corporation": "llc",
+        "company": "group",
+        "llc": "inc",
+        "inc": "group",
+        "limited": "solutions",
+        "ltd": "holdings",
+        "pvt": "private",
+    }
+
+    mutated = text
+    for old, new in suffix_map.items():
+        if text.lower().endswith(old):
+            mutated = text[: -len(old)] + new
+            break
+    else:
+        if len(tokens) > 1:
+            idx = max(0, len(tokens) - 1)
+            mutated = " ".join(tokens[:idx] + ["group"])
+        else:
+            mutated = f"{text} group"
+    return mutated
+
+
+def _mutate_address(address: Any):
+    if address is None or pd.isna(address):
+        return None
+    text = str(address).strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    replacements = [
+        ("street", "avenue"),
+        ("st", "ave"),
+        ("road", "lane"),
+        ("rd", "ln"),
+        ("ave", "road"),
+        ("lane", "drive"),
+        ("drive", "street"),
+    ]
+    for old, new in replacements:
+        if old in lowered:
+            return re.sub(rf"\b{re.escape(old)}\b", new, text, flags=re.IGNORECASE)
+    if "," in text:
+        left, rest = text.split(",", 1)
+        return f"{left.replace(' ', ' ')} 9999, {rest.strip()}"
+    return f"{text} Suite 999"
+
+
+def generate_hard_negatives(candidate_pairs: pd.DataFrame, target_col: str = "label", max_per_row: int = 2):
+    """Create near-miss negatives that are intentionally similar but not matching."""
+    if candidate_pairs is None or candidate_pairs.empty:
+        return pd.DataFrame()
+
+    data = candidate_pairs.copy()
+    generated = []
+    for _, row in data.iterrows():
+        base = row.to_dict()
+        base[target_col] = 0
+
+        name_variant = _mutate_name(base.get("right_name")) or _mutate_name(base.get("left_name"))
+        address_variant = _mutate_address(base.get("right_address")) or _mutate_address(base.get("left_address"))
+
+        if name_variant is not None:
+            neg_name = dict(base)
+            neg_name["right_name"] = name_variant
+            if "left_name" in neg_name and "right_name" in neg_name and neg_name["left_name"] == neg_name["right_name"]:
+                neg_name["right_name"] = f"{neg_name['right_name']} group"
+            generated.append(neg_name)
+
+        if address_variant is not None:
+            neg_address = dict(base)
+            neg_address["right_address"] = address_variant
+            generated.append(neg_address)
+
+        if len(generated) >= max_per_row * max(1, len(data)):
+            break
+
+    if not generated:
+        empty = data.copy()
+        empty[target_col] = 0
+        return empty
+
+    result = pd.DataFrame(generated)
+    if target_col not in result.columns:
+        result[target_col] = 0
+    if result.empty:
+        return result
+
+    result[target_col] = 0
+    result = result.reindex(columns=data.columns.union(result.columns, sort=False))
+    if target_col not in result.columns:
+        result[target_col] = 0
+    return result
 
 
 def _split_train_valid(data: pd.DataFrame, target_col: str = "label", test_size: float = 0.2, random_state: int = 42):
@@ -147,6 +254,7 @@ def train_baseline_models(
 
 
 __all__ = [
+    "generate_hard_negatives",
     "train_catboost_model",
     "train_lightgbm_model",
     "compare_validation_results",
