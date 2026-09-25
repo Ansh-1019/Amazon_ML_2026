@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 import numpy as np
+import pandas as pd
 
 
 def _as_float_array(values):
@@ -89,6 +90,53 @@ def keep_match(probability, threshold: float = 0.5, *, singleton: bool = False):
     return prob >= float(threshold)
 
 
+def aggregate_entity_matches(
+    pair_predictions: pd.DataFrame | None,
+    *,
+    entity_col: str = "source1_entity_id",
+    candidate_col: str = "candidate_entity_id",
+    score_col: str = "probability",
+    threshold: float = 0.5,
+):
+    """Aggregate pairwise predictions into the final S1 -> list of matched IDs format."""
+    if pair_predictions is None or pair_predictions.empty:
+        return {}
+
+    result: dict[str, list[str]] = {}
+    entity_ids = set()
+    for _, row in pair_predictions.iterrows():
+        entity_id = row.get(entity_col)
+        candidate_id = row.get(candidate_col)
+        probability = row.get(score_col, 0.0)
+        if pd.notna(entity_id):
+            entity_ids.add(str(entity_id))
+        if pd.notna(entity_id) and pd.notna(candidate_id) and keep_match(probability, threshold=threshold, singleton=False):
+            result.setdefault(str(entity_id), []).append(str(candidate_id))
+
+    for entity_id in entity_ids:
+        result.setdefault(entity_id, [])
+
+    normalized = {}
+    for entity_id, matches in sorted(result.items()):
+        seen = set()
+        ordered = []
+        for match in matches:
+            if match not in seen:
+                seen.add(match)
+                ordered.append(match)
+        normalized[entity_id] = ordered
+
+    missing_entities = [
+        str(entity_id)
+        for entity_id in sorted(set(pair_predictions[entity_col].dropna().astype(str)))
+        if str(entity_id) not in normalized
+    ]
+    for entity_id in missing_entities:
+        normalized[entity_id] = []
+
+    return normalized
+
+
 def entity_decision(
     pair_scores: Iterable[float] | None,
     *,
@@ -124,6 +172,7 @@ def should_keep_match(probability, threshold: float = 0.5, *, singleton: bool = 
 
 
 __all__ = [
+    "aggregate_entity_matches",
     "choose_threshold",
     "keep_match",
     "entity_decision",

@@ -6,7 +6,7 @@ from business_entity_resolution.src.model import (
     generate_hard_negatives,
     train_baseline_models,
 )
-from business_entity_resolution.src.threshold import choose_threshold
+from business_entity_resolution.src.threshold import aggregate_entity_matches, choose_threshold
 
 
 def _make_pairs():
@@ -93,6 +93,20 @@ def test_threshold_uses_precision_heavy_f05_score():
     threshold = choose_threshold(labels, probabilities)
 
     assert 0.7 <= threshold <= 0.9
+
+
+def test_aggregate_entity_matches_builds_entity_level_lists():
+    rows = [
+        {"source1_entity_id": "S1-1", "candidate_entity_id": "S2-10", "probability": 0.95},
+        {"source1_entity_id": "S1-1", "candidate_entity_id": "S2-11", "probability": 0.82},
+        {"source1_entity_id": "S1-1", "candidate_entity_id": "S3-20", "probability": 0.48},
+        {"source1_entity_id": "S1-2", "candidate_entity_id": "S2-99", "probability": 0.20},
+    ]
+
+    matches = aggregate_entity_matches(pd.DataFrame(rows), threshold=0.8)
+
+    assert matches["S1-1"] == ["S2-10", "S2-11"]
+    assert matches["S1-2"] == []
 
 
 def test_build_pair_features_has_advanced_name_and_address_signals():
