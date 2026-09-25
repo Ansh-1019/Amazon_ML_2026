@@ -7,6 +7,26 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+_COMMON_BUSINESS_TOKENS = {
+    "and",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "inc",
+    "incorporated",
+    "ltd",
+    "limited",
+    "llc",
+    "llp",
+    "pvt",
+    "private",
+    "services",
+    "solutions",
+    "systems",
+    "the",
+}
+
 
 def _clean_text(value):
     if pd.isna(value):
@@ -14,6 +34,69 @@ def _clean_text(value):
     text = str(value).strip().lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
+
+
+def _tokenize(value):
+    return [token for token in _clean_text(value).split() if token]
+
+
+def _char_ngrams(value, n=3):
+    text = re.sub(r"\s+", "", _clean_text(value))
+    if len(text) < n:
+        return {text} if text else set()
+    return {text[i : i + n] for i in range(len(text) - n + 1)}
+
+
+def _jaccard_similarity(left_values, right_values):
+    left_set = set(left_values)
+    right_set = set(right_values)
+    if not left_set and not right_set:
+        return 1.0
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set & right_set) / len(left_set | right_set)
+
+
+def _dice_similarity(left_values, right_values):
+    left_set = set(left_values)
+    right_set = set(right_values)
+    if not left_set and not right_set:
+        return 1.0
+    if not left_set or not right_set:
+        return 0.0
+    inter = len(left_set & right_set)
+    return (2.0 * inter) / (len(left_set) + len(right_set))
+
+
+def _rare_token_overlap(left, right):
+    left_tokens = {
+        token
+        for token in _tokenize(left)
+        if token not in _COMMON_BUSINESS_TOKENS and len(token) > 2
+    }
+    right_tokens = {
+        token
+        for token in _tokenize(right)
+        if token not in _COMMON_BUSINESS_TOKENS and len(token) > 2
+    }
+    if not left_tokens and not right_tokens:
+        left_tokens = set(_tokenize(left))
+        right_tokens = set(_tokenize(right))
+    if not left_tokens and not right_tokens:
+        return 1.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return _jaccard_similarity(left_tokens, right_tokens)
+
+
+def _char_similarity(left, right, n=3):
+    left_grams = _char_ngrams(left, n=n)
+    right_grams = _char_ngrams(right, n=n)
+    if not left_grams and not right_grams:
+        return 1.0
+    if not left_grams or not right_grams:
+        return 0.0
+    return _jaccard_similarity(left_grams, right_grams)
 
 
 def _safe_numeric(value):
@@ -187,6 +270,34 @@ def build_pair_features(candidate_pairs: pd.DataFrame, target_col: str | None = 
         feature_frame[f"{base}_text_similarity"] = text["text_similarity"]
         feature_frame[f"{base}_text_overlap"] = text["text_overlap"]
         feature_frame[f"{base}_text_exact"] = text["text_exact"]
+
+        feature_frame[f"{base}_char_similarity"] = left_series.combine(
+            right_series,
+            lambda left, right: _char_similarity(left, right, n=3),
+        )
+        feature_frame[f"{base}_rare_token_overlap"] = left_series.combine(
+            right_series,
+            lambda left, right: _rare_token_overlap(left, right),
+        )
+        feature_frame[f"{base}_dice_similarity"] = left_series.combine(
+            right_series,
+            lambda left, right: _dice_similarity(
+                _tokenize(left),
+                _tokenize(right),
+            ),
+        )
+
+        if base in {"country", "country_code", "nation"}:
+            feature_frame[f"{base}_exact"] = feature_frame[f"{base}_text_exact"]
+            feature_frame["country_exact"] = feature_frame[f"{base}_text_exact"]
+
+        if base in {"name", "business_name", "company_name"}:
+            feature_frame["name_rare_token_overlap"] = feature_frame[f"{base}_rare_token_overlap"]
+            feature_frame["name_char_similarity"] = feature_frame[f"{base}_char_similarity"]
+
+        if base in {"address", "business_address", "street_address"}:
+            feature_frame["address_char_similarity"] = feature_frame[f"{base}_char_similarity"]
+            feature_frame["address_rare_token_overlap"] = feature_frame[f"{base}_rare_token_overlap"]
 
     # Add a simple "all-equal" overall quality score for the case where an exact
     # match across all pair features is present.

@@ -72,3 +72,39 @@ def test_compare_validation_results_uses_probability_output():
     assert "catboost" in comparison
     assert "lightgbm" in comparison
     assert comparison["catboost"]["val_auc"] >= 0.0
+
+
+def test_build_pair_features_has_advanced_name_and_address_signals():
+    pairs = pd.DataFrame(
+        [
+            {
+                "left_name": "Acme Corporation",
+                "right_name": "Acme Corp",
+                "left_address": "123 Main Street, Boston, MA",
+                "right_address": "123 Main St, Boston, MA",
+                "left_country": "US",
+                "right_country": "US",
+                "label": 1,
+            },
+            {
+                "left_name": "Green Solar",
+                "right_name": "Red Energy",
+                "left_address": "10 Park Avenue, New York, NY",
+                "right_address": "20 Lake Road, Chicago, IL",
+                "left_country": "US",
+                "right_country": "US",
+                "label": 0,
+            },
+        ]
+    )
+
+    features = build_pair_features(pairs, target_col="label")
+
+    assert "name_rare_token_overlap" in features.columns
+    assert "name_char_similarity" in features.columns
+    assert "address_char_similarity" in features.columns
+    assert "country_exact" in features.columns
+
+    assert features["name_rare_token_overlap"].between(0.0, 1.0).all()
+    assert features["name_char_similarity"].between(0.0, 1.0).all()
+    assert features["address_char_similarity"].between(0.0, 1.0).all()
