@@ -3,6 +3,7 @@ import pandas as pd
 from business_entity_resolution.src.features import build_pair_features
 from business_entity_resolution.src.model import (
     compare_validation_results,
+    generate_hard_negatives,
     train_baseline_models,
 )
 
@@ -72,6 +73,16 @@ def test_compare_validation_results_uses_probability_output():
     assert "catboost" in comparison
     assert "lightgbm" in comparison
     assert comparison["catboost"]["val_auc"] >= 0.0
+
+
+def test_generate_hard_negatives_creates_ambiguous_false_matches():
+    pairs = _make_pairs()
+    hard_negatives = generate_hard_negatives(pairs, target_col="label")
+
+    assert not hard_negatives.empty
+    assert set(hard_negatives["label"].unique()) == {0}
+    assert len(hard_negatives) > 0
+    assert {"left_name", "right_name"}.issubset(hard_negatives.columns)
 
 
 def test_build_pair_features_has_advanced_name_and_address_signals():
