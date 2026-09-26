@@ -29,9 +29,18 @@ from src.utils import setup_logger, load_config, ExperimentTracker
 from src.data import DataLoader, DataNormalizer
 from src.blocking import CandidateGenerator
 from src.features import FeatureExtractor
+from src.features.features import build_pair_features
 from src.modeling import ModelTrainer, ModelPredictor
-from src.evaluation import EntityEvaluator
+from src.modeling.model import (
+    generate_hard_negatives,
+    train_catboost_model,
+    train_lightgbm_model,
+    predict_pair_probabilities,
+)
 from src.decision import EntityResolver
+from src.decision.threshold import choose_threshold
+from src.decision.adapter import adapt_model_predictions_for_resolver
+from src.evaluation import EntityEvaluator
 from src.submission import (
     generate_submission_files,
     run_official_validator,
@@ -438,6 +447,156 @@ class EntityResolutionPipeline:
         return features_df
 
     # -----------------------------------------------------------------------
+    # Stage 3.5: Model Training & Threshold Optimization
+    # -----------------------------------------------------------------------
+    def train_model(
+        self,
+        candidates_df: pd.DataFrame,
+        s1_norm: pd.DataFrame,
+        s2_norm: pd.DataFrame,
+        s3_norm: pd.DataFrame,
+        train_matches: pd.DataFrame,
+        model_type: str = "catboost",
+        optimize_threshold: bool = True,
+        random_state: int = 42,
+    ) -> Tuple[Any, float]:
+        """
+        Trains CatBoost or LightGBM model on candidate pairs with hard negatives,
+        and optionally optimizes the decision threshold on validation predictions.
+        """
+        self.logger.info(f"--- Stage 3.5: Model Training ({model_type.upper()}) & Threshold Optimization ---")
+        start_t = time.time()
+
+        if candidates_df.empty or train_matches is None or train_matches.empty:
+            self.logger.warning("Empty candidates or training matches. Skipping model training.")
+            return self.model, self.resolver.threshold
+
+        # 1. Parse ground truth
+        data_cfg = self.config.get("data", {})
+        gt: Dict[str, Set[str]] = {}
+        if "source1_entity_id" in train_matches.columns:
+            for _, row in train_matches.iterrows():
+                s1_v = str(row["source1_entity_id"]).strip()
+                if not s1_v or s1_v in ("nan", "None"):
+                    continue
+                matched_raw = str(row.get("matched_entity_ids", "")).strip()
+                targets = set(
+                    x.strip() for x in matched_raw.split(",")
+                    if x.strip() and x.strip() not in ("nan", "None")
+                )
+                gt[s1_v] = targets
+        else:
+            id_s1 = "s1_id" if "s1_id" in train_matches.columns else data_cfg.get("id_column_s1", "entity_id")
+            id_s2 = "s2_id" if "s2_id" in train_matches.columns else data_cfg.get("id_column_s2", "entity_id")
+            id_s3 = "s3_id" if "s3_id" in train_matches.columns else data_cfg.get("id_column_s3", "entity_id")
+            for _, row in train_matches.iterrows():
+                s1_v = str(row[id_s1]).strip() if id_s1 in row else ""
+                if not s1_v or s1_v in ("nan", "None"):
+                    continue
+                gt_ids: Set[str] = set()
+                for id_col in [id_s2, id_s3]:
+                    if id_col and id_col in row and pd.notna(row[id_col]):
+                        val = str(row[id_col]).strip()
+                        if val and val not in ("nan", "None"):
+                            gt_ids.add(val)
+                gt[s1_v] = gt_ids
+
+        # 2. Build wide candidate pairs
+        from src.features.pairwise import _extract_entity_record_map
+        id_s1_col = data_cfg.get("id_column_s1", "entity_id")
+        id_s2_col = data_cfg.get("id_column_s2", "entity_id")
+        id_s3_col = data_cfg.get("id_column_s3", "entity_id")
+
+        name_col = data_cfg.get("name_column", "business_name")
+        addr_col = data_cfg.get("address_column", "business_address")
+        country_col = data_cfg.get("country_column", "country")
+
+        for c in ["name_clean", "business_name_clean", "business_name", "name"]:
+            if c in s1_norm.columns:
+                name_col = c
+                break
+        for c in ["business_address_normalized", "address_clean", "business_address_clean", "business_address", "address"]:
+            if c in s1_norm.columns:
+                addr_col = c
+                break
+        for c in ["country_clean", "country"]:
+            if c in s1_norm.columns:
+                country_col = c
+                break
+
+        s1_map = _extract_entity_record_map(s1_norm, id_s1_col if id_s1_col in s1_norm.columns else "entity_id", name_col, addr_col, country_col)
+        s2_map = _extract_entity_record_map(s2_norm, id_s2_col if id_s2_col in s2_norm.columns else "entity_id", name_col, addr_col, country_col)
+        s3_map = _extract_entity_record_map(s3_norm, id_s3_col if id_s3_col in s3_norm.columns else "entity_id", name_col, addr_col, country_col)
+        target_map = {**s2_map, **s3_map}
+
+        rows = []
+        for _, r in candidates_df.iterrows():
+            s1_id = str(r.get("s1_id") or r.get("source1_entity_id") or r.get("entity_id", "")).strip()
+            target_id = str(r.get("target_id") or r.get("candidate_entity_id") or r.get("candidate_id", "")).strip()
+            if not target_id:
+                for col in ["s2_id", "s3_id"]:
+                    if col in r and pd.notna(r[col]) and str(r[col]).strip():
+                        target_id = str(r[col]).strip()
+                        break
+            if not s1_id or not target_id:
+                continue
+
+            s1_rec = s1_map.get(s1_id, {})
+            tgt_rec = target_map.get(target_id, {})
+            label = 1 if target_id in gt.get(s1_id, set()) else 0
+
+            rows.append({
+                "left_name": s1_rec.get("name", ""),
+                "left_address": s1_rec.get("address", ""),
+                "left_country": s1_rec.get("country", ""),
+                "right_name": tgt_rec.get("name", ""),
+                "right_address": tgt_rec.get("address", ""),
+                "right_country": tgt_rec.get("country", ""),
+                "label": label,
+            })
+
+        base_df = pd.DataFrame(rows)
+        if base_df.empty or "label" not in base_df.columns or base_df["label"].nunique() < 2:
+            self.logger.warning("Insufficient labeled class balance for supervised training. Keeping existing model/baseline.")
+            return self.model, self.resolver.threshold
+
+        # 3. Generate hard negatives
+        hard_negs = generate_hard_negatives(base_df, target_col="label")
+        combined_train = pd.concat([base_df, hard_negs], ignore_index=True)
+
+        # 4. Extract features
+        X_all = build_pair_features(combined_train, target_col="label")
+        y_all = X_all.pop("label")
+
+        # 5. Train model with stratified train/validation split
+        from sklearn.model_selection import train_test_split
+        test_size = 0.2 if len(X_all) >= 20 else 0.5
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_all, y_all, test_size=test_size, random_state=random_state, stratify=y_all
+        )
+
+        if model_type == "lightgbm":
+            model = train_lightgbm_model(X_train, y_train, X_val, y_val, random_state=random_state)
+        else:
+            model = train_catboost_model(X_train, y_train, X_val, y_val, random_state=random_state)
+
+        self.model = model
+        self.logger.info(f"Trained {model_type.upper()} classifier successfully on {len(X_train)} training pairs.")
+
+        # 6. Optimize decision threshold on validation set
+        chosen_thr = self.resolver.threshold
+        if optimize_threshold:
+            val_probs = model.predict_proba(X_val)
+            if val_probs.ndim == 2:
+                val_probs = val_probs[:, 1]
+            chosen_thr = choose_threshold(y_val, val_probs)
+            self.resolver.threshold = chosen_thr
+            self.logger.info(f"Optimized F0.5 decision threshold selected: {chosen_thr:.4f}")
+
+        self.logger.info(f"Stage 3.5 completed in {time.time() - start_t:.2f}s")
+        return self.model, chosen_thr
+
+    # -----------------------------------------------------------------------
     # Stage 4: Model Inference
     # -----------------------------------------------------------------------
     def score_candidates(
@@ -447,6 +606,7 @@ class EntityResolutionPipeline:
     ) -> pd.DataFrame:
         """
         Stage 4: Scores candidate pairs using ML model or fallback adapter.
+        Uses adapt_model_predictions_for_resolver to guarantee schema compliance.
         """
         self.logger.info("--- Stage 4: Model Inference & Candidate Scoring ---")
         start_t = time.time()
@@ -470,8 +630,11 @@ class EntityResolutionPipeline:
             probs = adapter.predict_proba(features_df)
             scored_df["match_score"] = probs
 
+        # Adapt model output to EntityResolver format
+        adapted_df = adapt_model_predictions_for_resolver(scored_df)
+
         self.logger.info(f"Stage 4 completed in {time.time() - start_t:.2f}s")
-        return scored_df
+        return adapted_df
 
     # -----------------------------------------------------------------------
     # Stage 5: Entity-Level Decision Resolution
@@ -643,9 +806,21 @@ class EntityResolutionPipeline:
         train_matches: Optional[pd.DataFrame] = None,
         threshold: Optional[float] = None,
         output_dir: Optional[Union[str, Path]] = None,
+        train_model: bool = False,
+        model_type: str = "catboost",
+        optimize_threshold: bool = True,
     ) -> Dict[str, Any]:
         """
-        Executes the entire 6-stage entity resolution pipeline.
+        Executes the entire end-to-end entity resolution pipeline.
+        
+        Flow:
+          1. DataLoader & Normalization (Name & Address)
+          2. Candidate Generation (Blocking & Union via IdAdapter)
+          3. Pairwise Feature Extraction (Anmol build_pair_features)
+          3.5 Optional Model Training (CatBoost/LightGBM + Hard Negatives) & Threshold Selection
+          4. Model Inference & Probability Scoring (adapted via adapt_model_predictions_for_resolver)
+          5. Entity Decision Resolution (EntityResolver)
+          6. Evaluation & Submission Generation with Official Validation
         
         Returns:
             Dictionary containing execution metadata, paths, metrics, and validation status.
@@ -679,6 +854,18 @@ class EntityResolutionPipeline:
             s2_norm=s2_norm,
             s3_norm=s3_norm,
         )
+
+        # Stage 3.5: Supervised Model Training & Threshold Optimization (if requested or ground truth provided)
+        if train_model or (train_matches is not None and not train_matches.empty and self.model is None):
+            self.train_model(
+                candidates_df=candidates_df,
+                s1_norm=s1_norm,
+                s2_norm=s2_norm,
+                s3_norm=s3_norm,
+                train_matches=train_matches,
+                model_type=model_type,
+                optimize_threshold=optimize_threshold and (threshold is None),
+            )
 
         # Stage 4: Model inference
         scored_candidates_df = self.score_candidates(

@@ -77,11 +77,26 @@ class ValidationReport:
 
     @property
     def macro_f05(self) -> float:
-        return self._data["metrics"].get("macro_f0.5", 0.0)
+        return self.entity.get("macro_f0.5", self._data.get("metrics", {}).get("macro_f0.5", 0.0))
 
     @property
     def blocking_recall(self) -> float:
-        return self._data["blocking_stats"].get("blocking_recall", 0.0)
+        return self.blocking.get("blocking_recall", 0.0)
+
+    @property
+    def blocking(self) -> Dict[str, Any]:
+        return self._data.get("blocking", self._data.get("blocking_stats", {}))
+
+    @property
+    def pairwise(self) -> Dict[str, Any]:
+        return self._data.get("pairwise", self._data.get("pairwise_stats", {}))
+
+    @property
+    def entity(self) -> Dict[str, Any]:
+        return self._data.get("entity", self._data.get("metrics", {}))
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
 
     @property
     def as_dict(self) -> Dict[str, Any]:
@@ -102,64 +117,59 @@ class ValidationReport:
     def print_summary(self) -> None:
         d = self._data
         ri = d["run_info"]
-        ds = d["data_stats"]
-        bs = d["blocking_stats"]
-        ms = d["matching_stats"]
-        mt = d["metrics"]
-        ea = d["error_analysis"]
+        ds = d.get("data_stats", {})
+        blk = self.blocking
+        pw = self.pairwise
+        ent = self.entity
+        ea = d.get("error_analysis", {})
 
-        w = 56
+        w = 60
         sep = "-" * w
         print(f"\n{'=' * w}")
-        print(f"  VALIDATION REPORT   [{ri['experiment_id']}]")
+        print(f"  INTEGRATED VALIDATION REPORT   [{ri['experiment_id']}]")
         print(f"{'=' * w}")
-        print(f"  Timestamp : {ri['timestamp']}")
-        print(f"  Threshold : {ri['threshold']}")
+        print(f"  Timestamp : {ri.get('timestamp', 'N/A')}")
+        print(f"  Threshold : {ri.get('threshold', 'N/A')}")
         print(f"  Run dir   : {ri.get('run_dir', 'N/A')}")
 
-        print(f"\n  {'DATA':-<{w - 2}}")
-        print(f"  Source 1 entities        : {ds['n_s1']:>8,}")
-        print(f"  Source 2 entities        : {ds['n_s2']:>8,}")
-        print(f"  Source 3 entities        : {ds['n_s3']:>8,}")
-        print(f"  Countries in S1          : {', '.join(ds['countries_s1'])}")
-        print(f"  GT entities w/ matches   : {ds['gt_entities_with_matches']:>8,}")
-        print(f"  GT entities w/o matches  : {ds['gt_entities_without_matches']:>8,}")
+        if ds:
+            print(f"\n  {'DATA':-<{w - 2}}")
+            print(f"  Source 1 entities        : {ds.get('n_s1', 0):>8,}")
+            print(f"  Source 2 entities        : {ds.get('n_s2', 0):>8,}")
+            print(f"  Source 3 entities        : {ds.get('n_s3', 0):>8,}")
 
-        print(f"\n  {'BLOCKING':-<{w - 2}}")
-        print(f"  Total candidates         : {bs['total_candidates']:>8,}")
-        print(f"  Mean  cands / S1         : {bs['mean_candidates_per_s1']:>8.2f}")
-        print(f"  Median cands / S1        : {bs['median_candidates_per_s1']:>8.2f}")
-        print(f"  P95   cands / S1         : {bs['p95_candidates_per_s1']:>8.2f}")
-        print(f"  Blocking recall          : {bs['blocking_recall']:>8.4f}")
-        print(f"  Entities w/ zero cands   : {bs['entities_with_zero_candidates']:>8,}")
-        print(f"  GT pairs missing in cands: {bs['gt_pairs_missing_in_candidates']:>8,}")
+        print(f"\n  {'BLOCKING (Maithili)':-<{w - 2}}")
+        print(f"  blocking_recall          : {blk.get('blocking_recall', 0.0):>8.4f}")
+        print(f"  S2_blocking_recall       : {blk.get('S2_blocking_recall', 0.0):>8.4f}")
+        print(f"  S3_blocking_recall       : {blk.get('S3_blocking_recall', 0.0):>8.4f}")
+        print(f"  mean_candidates          : {blk.get('mean_candidates', 0.0):>8.2f}")
+        print(f"  median_candidates        : {blk.get('median_candidates', 0.0):>8.2f}")
+        print(f"  p95_candidates           : {blk.get('p95_candidates', 0.0):>8.2f}")
+        print(f"  zero_candidate_rate      : {blk.get('zero_candidate_rate', 0.0):>8.4f}")
 
-        print(f"\n  {'MATCHING':-<{w - 2}}")
-        print(f"  Entities w/ zero matches : {ms['entities_zero_matches']:>8,}")
-        print(f"  Entities w/ one match    : {ms['entities_one_match']:>8,}")
-        print(f"  Entities w/ multi matches: {ms['entities_multi_matches']:>8,}")
-        print(f"  Avg matches / entity     : {ms['avg_matches_per_entity']:>8.3f}")
+        print(f"\n  {'PAIRWISE (Anmol)':-<{w - 2}}")
+        print(f"  training_pairs           : {pw.get('training_pairs', 0):>8,}")
+        print(f"  positive_pairs           : {pw.get('positive_pairs', 0):>8,}")
+        print(f"  negative_pairs           : {pw.get('negative_pairs', 0):>8,}")
+        print(f"  hard_negative_pairs      : {pw.get('hard_negative_pairs', 0):>8,}")
 
-        print(f"\n  {'METRICS':-<{w - 2}}")
-        print(f"  Macro Precision          : {mt['macro_precision']:>8.4f}")
-        print(f"  Macro Recall             : {mt['macro_recall']:>8.4f}")
-        print(f"  Macro F0.5  (HEADLINE)   : {mt['macro_f0.5']:>8.4f}")
-        print(f"  Exact entity match rate  : {mt['exact_match_rate']:>8.4f}")
-        print(f"  Correctly-empty rate     : {mt['correctly_empty_rate']:>8.4f}")
-        print(f"  False-positive-empty rate: {mt['false_positive_empty_rate']:>8.4f}")
+        print(f"\n  {'ENTITY (Ansh + Anmol)':-<{w - 2}}")
+        print(f"  macro_f0.5  (HEADLINE)   : {ent.get('macro_f0.5', 0.0):>8.4f}")
+        print(f"  macro_precision          : {ent.get('macro_precision', 0.0):>8.4f}")
+        print(f"  macro_recall             : {ent.get('macro_recall', 0.0):>8.4f}")
+        print(f"  exact_match_rate         : {ent.get('exact_match_rate', 0.0):>8.4f}")
+        print(f"  correctly_empty          : {ent.get('correctly_empty', 0):>8,}")
+        print(f"  false_positive_empty     : {ent.get('false_positive_empty', 0):>8,}")
+        print(f"  average_matches_per_entity: {ent.get('average_matches_per_entity', 0.0):>8.3f}")
+        print(f"  zero_match_count         : {ent.get('zero_match_count', 0):>8,}")
+        print(f"  one_match_count          : {ent.get('one_match_count', 0):>8,}")
+        print(f"  multi_match_count        : {ent.get('multi_match_count', 0):>8,}")
 
-        print(f"\n  {'ERROR ANALYSIS':-<{w - 2}}")
-        print(f"  FP entities (pred not GT): {len(ea['false_positive_entities']):>8,}")
-        print(f"  FN entities (GT not pred): {len(ea['false_negative_entities']):>8,}")
-        print(f"  GT pairs missing in cands: {len(ea['missed_candidate_entities']):>8,}")
-        print(f"  High-conf FP matches     : {len(ea['high_confidence_false_matches']):>8,}")
-
-        if ea["false_positive_entities"]:
-            sample = ea["false_positive_entities"][:5]
-            print(f"\n  Sample FP entities: {sample}")
-        if ea["false_negative_entities"]:
-            sample = ea["false_negative_entities"][:5]
-            print(f"  Sample FN entities: {sample}")
+        if ea:
+            print(f"\n  {'ERROR ANALYSIS':-<{w - 2}}")
+            print(f"  FP entities (pred not GT): {len(ea.get('false_positive_entities', [])):>8,}")
+            print(f"  FN entities (GT not pred): {len(ea.get('false_negative_entities', [])):>8,}")
+            print(f"  GT pairs missing in cands: {len(ea.get('missed_candidate_entities', [])):>8,}")
 
         print(f"{'=' * w}\n")
 
@@ -167,13 +177,13 @@ class ValidationReport:
 
     def compare(self, other: "ValidationReport") -> Dict[str, float]:
         """Returns delta (self - other) for key metrics. Positive = improvement."""
-        mt_a = self._data["metrics"]
-        mt_b = other._data["metrics"]
+        mt_a = self.entity
+        mt_b = other.entity
         return {
-            "delta_macro_f0.5":     mt_a["macro_f0.5"]     - mt_b["macro_f0.5"],
-            "delta_macro_precision": mt_a["macro_precision"] - mt_b["macro_precision"],
-            "delta_macro_recall":   mt_a["macro_recall"]    - mt_b["macro_recall"],
-            "delta_blocking_recall": self.blocking_recall    - other.blocking_recall,
+            "delta_macro_f0.5":     mt_a.get("macro_f0.5", 0.0)     - mt_b.get("macro_f0.5", 0.0),
+            "delta_macro_precision": mt_a.get("macro_precision", 0.0) - mt_b.get("macro_precision", 0.0),
+            "delta_macro_recall":   mt_a.get("macro_recall", 0.0)    - mt_b.get("macro_recall", 0.0),
+            "delta_blocking_recall": self.blocking_recall            - other.blocking_recall,
         }
 
 
@@ -220,23 +230,11 @@ class ValidationHarness:
         threshold: Optional[float] = None,
         output_dir: str = "output",
         save_report: bool = True,
+        pairwise_stats: Optional[Dict[str, Any]] = None,
     ) -> ValidationReport:
         """
         Executes the full pipeline on the supplied data + ground truth,
         then builds and returns a ValidationReport.
-
-        Args:
-            ground_truth : Dict mapping s1_id → GT match IDs (any iterable format).
-            s1_df        : Source 1 DataFrame (or None to load from config paths).
-            s2_df        : Source 2 DataFrame.
-            s3_df        : Source 3 DataFrame.
-            experiment_id: Human-readable run label (default: config project name).
-            threshold    : Decision threshold override.
-            output_dir   : Where to write TSV submission files.
-            save_report  : If True, write report.json next to summary.json.
-
-        Returns:
-            ValidationReport with all metric sections populated.
         """
         exp_id = experiment_id or self.config.get("project", {}).get("experiment_id", "val_run")
         thr = threshold if threshold is not None else self.config.get("decision", {}).get("threshold", 0.5)
@@ -289,9 +287,12 @@ class ValidationHarness:
 
         # ── Compute all sections ──────────────────────────────────────────
         data_section   = self._compute_data_stats(s1_norm, s2_norm, s3_norm, gt)
-        blocking_sec   = self._compute_blocking_stats(candidate_map, gt)
+        s2_ids_set     = set(s2_norm["entity_id"].astype(str)) if "entity_id" in s2_norm.columns else set()
+        s3_ids_set     = set(s3_norm["entity_id"].astype(str)) if "entity_id" in s3_norm.columns else set()
+        blocking_sec   = self._compute_blocking_stats(candidate_map, gt, s2_ids=s2_ids_set, s3_ids=s3_ids_set)
+        pairwise_sec   = self._compute_pairwise_stats(pairwise_stats)
         matching_sec   = self._compute_matching_stats(match_map, all_s1_ids)
-        metrics_sec, per_entity = self._compute_metrics(gt, match_map, all_s1_ids)
+        metrics_sec, per_entity = self._compute_metrics(gt, match_map, all_s1_ids, matching_sec)
         error_sec      = self._compute_error_analysis(
             gt, match_map, candidate_map, per_entity
         )
@@ -316,8 +317,12 @@ class ValidationHarness:
                 "seed":      seed,
             },
             "data_stats":    data_section,
+            "blocking":      blocking_sec,
             "blocking_stats": blocking_sec,
+            "pairwise":      pairwise_sec,
+            "pairwise_stats": pairwise_sec,
             "matching_stats": matching_sec,
+            "entity":        metrics_sec,
             "metrics":       metrics_sec,
             "error_analysis": error_sec,
         }
@@ -390,6 +395,8 @@ class ValidationHarness:
         self,
         candidate_map: Dict[str, List[str]],
         gt: Dict[str, Set[str]],
+        s2_ids: Optional[Set[str]] = None,
+        s3_ids: Optional[Set[str]] = None,
     ) -> Dict[str, Any]:
         counts = [len(v) for v in candidate_map.values()]
         total_candidates = sum(counts)
@@ -397,11 +404,17 @@ class ValidationHarness:
         median_c = float(np.median(counts)) if counts else 0.0
         p95_c   = float(np.percentile(counts, 95)) if counts else 0.0
         zero_c  = sum(1 for c in counts if c == 0)
+        zero_rate = zero_c / len(counts) if counts else 0.0
 
-        # Blocking recall
+        # Blocking recall overall, S2, and S3
         total_gt_pairs = 0
         found = 0
+        s2_gt = 0
+        s2_found = 0
+        s3_gt = 0
+        s3_found = 0
         missed_entities: List[str] = []
+
         for s1_id, gt_set in gt.items():
             if not gt_set:
                 continue
@@ -412,19 +425,55 @@ class ValidationHarness:
             if len(hits) < len(gt_set):
                 missed_entities.append(s1_id)
 
+            for target in gt_set:
+                target_str = str(target)
+                is_s3 = (
+                    (s3_ids is not None and target in s3_ids) or
+                    target_str.startswith("s3_") or
+                    target_str.startswith("S3-")
+                )
+                if is_s3:
+                    s3_gt += 1
+                    if target in cands:
+                        s3_found += 1
+                else:
+                    s2_gt += 1
+                    if target in cands:
+                        s2_found += 1
+
         recall = found / total_gt_pairs if total_gt_pairs > 0 else 1.0
+        s2_recall = s2_found / s2_gt if s2_gt > 0 else 1.0
+        s3_recall = s3_found / s3_gt if s3_gt > 0 else 1.0
 
         return {
-            "total_candidates": total_candidates,
+            "blocking_recall":          round(recall, 5),
+            "S2_blocking_recall":       round(s2_recall, 5),
+            "S3_blocking_recall":       round(s3_recall, 5),
+            "mean_candidates":          round(mean_c, 3),
+            "median_candidates":        round(median_c, 3),
+            "p95_candidates":           round(p95_c, 3),
+            "zero_candidate_rate":      round(zero_rate, 5),
+            # backward-compatible aliases
+            "total_candidates":         total_candidates,
             "mean_candidates_per_s1":   round(mean_c, 3),
             "median_candidates_per_s1": round(median_c, 3),
             "p95_candidates_per_s1":    round(p95_c, 3),
             "entities_with_zero_candidates": zero_c,
-            "total_gt_pairs": total_gt_pairs,
+            "total_gt_pairs":           total_gt_pairs,
             "gt_pairs_found_in_candidates": found,
             "gt_pairs_missing_in_candidates": total_gt_pairs - found,
-            "blocking_recall": round(recall, 5),
             "entities_missing_true_candidate": missed_entities,
+        }
+
+    def _compute_pairwise_stats(
+        self, pairwise_stats: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        pw = pairwise_stats or {}
+        return {
+            "training_pairs":      pw.get("training_pairs", 0),
+            "positive_pairs":      pw.get("positive_pairs", 0),
+            "negative_pairs":      pw.get("negative_pairs", 0),
+            "hard_negative_pairs": pw.get("hard_negative_pairs", 0),
         }
 
     def _compute_matching_stats(
@@ -448,6 +497,7 @@ class ValidationHarness:
         gt: Dict[str, Set[str]],
         match_map: Dict[str, List[str]],
         all_s1_ids: List[str],
+        matching_stats: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         evaluator = EntityEvaluator(beta=0.5)
         y_pred = {s1: set(ids) for s1, ids in match_map.items()}
@@ -458,14 +508,23 @@ class ValidationHarness:
         empty_gt = result["empty_gt_count"]
         fp_empty = result["false_positive_empty_count"]
 
+        ms = matching_stats or self._compute_matching_stats(match_map, all_s1_ids)
+
         metrics = {
-            "macro_f0.5":              round(result.get("macro_f_beta", 0.0), 5),
-            "macro_precision":         round(result.get("macro_precision", 0.0), 5),
-            "macro_recall":            round(result.get("macro_recall", 0.0), 5),
-            "exact_match_rate":        round(result.get("exact_match_rate", 0.0), 5),
-            "correctly_empty_rate":    round(correctly_empty / n, 5) if n else 0.0,
+            "macro_f0.5":                round(result.get("macro_f_beta", 0.0), 5),
+            "macro_precision":           round(result.get("macro_precision", 0.0), 5),
+            "macro_recall":              round(result.get("macro_recall", 0.0), 5),
+            "exact_match_rate":          round(result.get("exact_match_rate", 0.0), 5),
+            "correctly_empty":           correctly_empty,
+            "false_positive_empty":      fp_empty,
+            "average_matches_per_entity": ms.get("avg_matches_per_entity", 0.0),
+            "zero_match_count":          ms.get("entities_zero_matches", 0),
+            "one_match_count":           ms.get("entities_one_match", 0),
+            "multi_match_count":         ms.get("entities_multi_matches", 0),
+            # backward-compatible aliases
+            "correctly_empty_rate":      round(correctly_empty / n, 5) if n else 0.0,
             "false_positive_empty_rate": round(fp_empty / n, 5) if n else 0.0,
-            "number_of_entities":      n,
+            "number_of_entities":        n,
         }
         return metrics, result.get("per_entity_records", [])
 

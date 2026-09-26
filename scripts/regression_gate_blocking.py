@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-BRANCH2_ROOT = ROOT / "project-branch2"
 
 sys.path.insert(0, str(ROOT))
 
@@ -22,15 +21,15 @@ import json
 from pathlib import Path
 import pandas as pd
 
-BRANCH2_ROOT = Path(sys.argv[1])
-sys.path.insert(0, str(BRANCH2_ROOT))
+ROOT = Path(sys.argv[1])
+sys.path.insert(0, str(ROOT))
 
 import src.blocking as m_blocking
-import src.exact_blocking as m_exact
-import src.char_ngram_blocking as m_ngram
-import src.candidate_pipeline as m_pipe
-import src.normalization as m_norm
-import src.address as m_addr
+import src.blocking.exact_blocking as m_exact
+import src.blocking.char_ngram_blocking as m_ngram
+import src.blocking.candidate_pipeline as m_pipe
+import src.data.normalization as m_norm
+import src.data.address as m_addr
 
 with open(sys.argv[2], "r", encoding="utf-8") as f:
     payload = json.load(f)
@@ -89,7 +88,7 @@ def run_standalone_subproc(s1_df, s2_df, s3_df, top_k=20):
         with open(in_file, "w", encoding="utf-8") as f:
             json.dump(payload, f)
 
-        res = subprocess.run([sys.executable, str(runner_file), str(BRANCH2_ROOT), str(in_file), str(out_file)],
+        res = subprocess.run([sys.executable, str(runner_file), str(ROOT), str(in_file), str(out_file)],
                              capture_output=True, text=True, check=True)
         with open(out_file, "r", encoding="utf-8") as f:
             return json.load(f)
