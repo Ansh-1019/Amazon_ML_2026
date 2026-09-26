@@ -1,0 +1,59 @@
+project:
+  name: "Amazon ML Challenge 2026 - Entity Resolution"
+  experiment_id: "exp01_baseline"
+  seed: 42
+
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  candidates_dir: "data/candidates"
+  models_dir: "models"
+  experiments_dir: "experiments"
+  submissions_dir: "output"
+
+data:
+  source1_filename: "source1.tsv"
+  source2_filename: "source2.tsv"
+  source3_filename: "source3.tsv"
+  train_matches_filename: "train_matches.tsv"
+  id_column: "entity_id"
+  id_column_s1: "entity_id"
+  id_column_s2: "entity_id"
+  id_column_s3: "entity_id"
+  name_column: "business_name"
+  address_column: "business_address"
+  country_column: "country"
+
+blocking:
+  top_k: 20
+  min_similarity_threshold: 0.1
+  blocking_fields: ["business_name", "business_address", "country"]
+
+features:
+  string_similarity_metrics: ["levenshtein", "jaccard", "cosine_tfidf"]
+
+modeling:
+  model_type: "catboost"  # Options: catboost, lightgbm
+  params:
+    iterations: 500
+    learning_rate: 0.05
+    depth: 6
+    eval_metric: "Logloss"
+    random_seed: 42
+  cv_folds: 5
+
+evaluation:
+  beta: 0.5
+
+decision:
+  threshold: 0.5          # Global minimum score to accept a candidate as a match
+  threshold_s2: null      # Optional Source 2-specific threshold (overrides global)
+  threshold_s3: null      # Optional Source 3-specific threshold (overrides global)
+  top_margin: null        # Optional: drop candidates > margin below entity's best score
+  enforce_one_to_one: false
+
+submission:
+  matching_filename: "matching_results.tsv"
+  candidates_filename: "candidate_pairs.tsv"
+  enforce_s1_coverage: true
+  enforce_candidate_subset: true
