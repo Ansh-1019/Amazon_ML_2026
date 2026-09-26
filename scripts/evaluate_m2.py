@@ -35,7 +35,7 @@ import re
 import sys
 from time import perf_counter
 
-# Direct script execution works both in Colab and outside the repository cwd.
+# Support direct script execution outside the repository working directory.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -46,7 +46,6 @@ import pandas as pd
 from src.blocking import build_token_index, generate_token_candidates
 from src.normalization import normalize_name
 
-DEFAULT_DATA_DIR = Path('/content/drive/MyDrive/ML_DATA/student_resource/dataset/train')
 ID_PATTERN = re.compile(r'S[23]-[^\s,;|\[\]\'\"]+')
 PERCENTILES = (50, 90, 95, 99, 99.9)
 
@@ -328,7 +327,7 @@ def print_report(report: dict) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--data-dir', type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument('--data-dir', type=Path, required=True, help='Directory containing the training TSV files')
     parser.add_argument('--include-m1', action='store_true', help='Also evaluate exact names and M1 union M2')
     parser.add_argument('--missed-examples', type=int, default=20)
     parser.add_argument('--progress-every', type=int, default=10000, help='S1 progress interval; 0 disables')
