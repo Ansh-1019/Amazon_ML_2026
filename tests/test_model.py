@@ -11,6 +11,7 @@ from src.modeling.model import (
     train_lightgbm_model,
     predict_pair_probabilities,
 )
+from src.pipeline import EntityResolutionPipeline
 
 
 def _make_pairs():
@@ -128,3 +129,70 @@ def test_predict_pair_probabilities_standard_format():
     assert list(preds_df.columns) == ["source1_entity_id", "candidate_entity_id", "target_source", "probability"]
     assert len(preds_df) == len(pairs)
     assert preds_df["probability"].between(0.0, 1.0).all()
+
+
+def test_train_model_keeps_ground_truth_matches_missing_from_blocking():
+    config = {
+        "project": {"seed": 42},
+        "paths": {"raw_data_dir": "data/raw", "processed_data_dir": "data/processed", "candidates_dir": "data/candidates", "models_dir": "models", "experiments_dir": "experiments", "submissions_dir": "output"},
+        "data": {
+            "source1_filename": "source1.tsv",
+            "source2_filename": "source2.tsv",
+            "source3_filename": "source3.tsv",
+            "train_matches_filename": "train_matches.tsv",
+            "id_column": "entity_id",
+            "id_column_s1": "entity_id",
+            "id_column_s2": "entity_id",
+            "id_column_s3": "entity_id",
+            "name_column": "business_name",
+            "address_column": "business_address",
+            "country_column": "country",
+        },
+        "blocking": {"top_k": 10, "min_similarity_threshold": 0.1, "blocking_fields": ["business_name", "business_address", "country"]},
+        "decision": {"threshold": 0.5},
+        "submission": {"matching_filename": "matching_results.tsv", "candidates_filename": "candidate_pairs.tsv"},
+    }
+
+    s1 = pd.DataFrame(
+        [
+            {"entity_id": "s1_a", "business_name": "Acme Corp", "business_address": "123 Main St", "country": "US"},
+            {"entity_id": "s1_b", "business_name": "Beta LLC", "business_address": "456 Oak Ave", "country": "US"},
+            {"entity_id": "s1_c", "business_name": "Gamma Labs", "business_address": "789 Pine Rd", "country": "US"},
+        ]
+    )
+    s2 = pd.DataFrame(
+        [
+            {"entity_id": "s2_1", "business_name": "Acme Corporation", "business_address": "123 Main Street", "country": "US"},
+            {"entity_id": "s2_2", "business_name": "Gamma Labs Ltd", "business_address": "789 Pine Road", "country": "US"},
+            {"entity_id": "s2_other_1", "business_name": "Other Firm", "business_address": "111 First Ave", "country": "US"},
+            {"entity_id": "s2_other_2", "business_name": "Another Firm", "business_address": "222 Second Ave", "country": "US"},
+        ]
+    )
+    s3 = pd.DataFrame(columns=["entity_id", "business_name", "business_address", "country"])
+    train_matches = pd.DataFrame(
+        [
+            {"source1_entity_id": "s1_a", "matched_entity_ids": "s2_1"},
+            {"source1_entity_id": "s1_c", "matched_entity_ids": "s2_2"},
+        ]
+    )
+
+    candidates = pd.DataFrame(
+        [
+            {"s1_id": "s1_b", "s2_id": "s2_other_1", "candidate_entity_id": "s2_other_1", "target_id": "s2_other_1"},
+            {"s1_id": "s1_b", "s2_id": "s2_other_2", "candidate_entity_id": "s2_other_2", "target_id": "s2_other_2"},
+        ]
+    )
+
+    pipeline = EntityResolutionPipeline(config=config)
+    model, threshold = pipeline.train_model(
+        candidates_df=candidates,
+        s1_norm=s1,
+        s2_norm=s2,
+        s3_norm=s3,
+        train_matches=train_matches,
+        model_type="catboost",
+        optimize_threshold=False,
+    )
+
+    assert model is not None
+    assert threshold == 0.5

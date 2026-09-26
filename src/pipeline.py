@@ -530,6 +530,7 @@ class EntityResolutionPipeline:
         target_map = {**s2_map, **s3_map}
 
         rows = []
+        seen_positive_pairs: set[tuple[str, str]] = set()
         for _, r in candidates_df.iterrows():
             s1_id = str(r.get("s1_id") or r.get("source1_entity_id") or r.get("entity_id", "")).strip()
             target_id = str(r.get("target_id") or r.get("candidate_entity_id") or r.get("candidate_id", "")).strip()
@@ -544,6 +545,8 @@ class EntityResolutionPipeline:
             s1_rec = s1_map.get(s1_id, {})
             tgt_rec = target_map.get(target_id, {})
             label = 1 if target_id in gt.get(s1_id, set()) else 0
+            if label == 1:
+                seen_positive_pairs.add((s1_id, target_id))
 
             rows.append({
                 "left_name": s1_rec.get("name", ""),
@@ -554,6 +557,28 @@ class EntityResolutionPipeline:
                 "right_country": tgt_rec.get("country", ""),
                 "label": label,
             })
+
+        # Add ground-truth positives explicitly when blocking misses them, which is common
+        # on large real datasets with sparse candidate generation.
+        for s1_id, target_ids in gt.items():
+            s1_rec = s1_map.get(s1_id, {})
+            for target_id in sorted(target_ids):
+                if target_id not in target_map:
+                    continue
+                pair_key = (s1_id, target_id)
+                if pair_key in seen_positive_pairs:
+                    continue
+                tgt_rec = target_map.get(target_id, {})
+                rows.append({
+                    "left_name": s1_rec.get("name", ""),
+                    "left_address": s1_rec.get("address", ""),
+                    "left_country": s1_rec.get("country", ""),
+                    "right_name": tgt_rec.get("name", ""),
+                    "right_address": tgt_rec.get("address", ""),
+                    "right_country": tgt_rec.get("country", ""),
+                    "label": 1,
+                })
+                seen_positive_pairs.add(pair_key)
 
         base_df = pd.DataFrame(rows)
         if base_df.empty or "label" not in base_df.columns or base_df["label"].nunique() < 2:
@@ -568,12 +593,23 @@ class EntityResolutionPipeline:
         X_all = build_pair_features(combined_train, target_col="label")
         y_all = X_all.pop("label")
 
-        # 5. Train model with stratified train/validation split
+        # 5. Train model with a train/validation split. Real-data subsets can be very small,
+        # so we fall back to a non-stratified split when a class has fewer than 2 rows.
         from sklearn.model_selection import train_test_split
         test_size = 0.2 if len(X_all) >= 20 else 0.5
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_all, y_all, test_size=test_size, random_state=random_state, stratify=y_all
-        )
+        class_counts = y_all.value_counts()
+        if class_counts.min() < 2:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_all, y_all, test_size=test_size, random_state=random_state
+            )
+        else:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_all, y_all, test_size=test_size, random_state=random_state, stratify=y_all
+            )
+
+        if y_train.nunique() < 2 or y_val.nunique() < 2:
+            self.logger.warning("Training/validation split collapsed to a single class for this small real-data subset. Skipping supervised training.")
+            return self.model, self.resolver.threshold
 
         if model_type == "lightgbm":
             model = train_lightgbm_model(X_train, y_train, X_val, y_val, random_state=random_state)
