@@ -227,25 +227,38 @@ class EntityEvaluator:
                 "is_exact_match": metrics["is_exact_match"],
             })
 
-        macro_f_beta = float(np.mean(f_scores))
-        macro_precision = float(np.mean(precisions))
-        macro_recall = float(np.mean(recalls))
-        exact_match_rate = exact_matches / num_entities
+        pred_counts = [len(parse_id_set(y_pred.get(s1))) for s1 in s1_keys]
+        zero_match_count = sum(1 for c in pred_counts if c == 0)
+        one_match_count = sum(1 for c in pred_counts if c == 1)
+        multi_match_count = sum(1 for c in pred_counts if c > 1)
+        avg_matches = float(np.mean(pred_counts)) if num_entities else 0.0
+
+        macro_f_beta = float(np.mean(f_scores)) if num_entities else 0.0
+        macro_precision = float(np.mean(precisions)) if num_entities else 0.0
+        macro_recall = float(np.mean(recalls)) if num_entities else 0.0
+        exact_match_rate = exact_matches / num_entities if num_entities else 0.0
 
         results = {
             f"f_{self.beta}": round(macro_f_beta, 5),
             "macro_f_beta": round(macro_f_beta, 5),
+            "macro_f0.5": round(macro_f_beta, 5),
             "precision": round(macro_precision, 5),
             "macro_precision": round(macro_precision, 5),
             "recall": round(macro_recall, 5),
             "macro_recall": round(macro_recall, 5),
             "number_of_entities": num_entities,
             "exact_match_rate": round(exact_match_rate, 5),
-            "empty_gt_count": empty_gt_count,
+            "correctly_empty": correctly_empty_count,
             "correctly_empty_count": correctly_empty_count,
+            "false_positive_empty": false_positive_empty_count,
             "false_positive_empty_count": false_positive_empty_count,
+            "zero_match_count": zero_match_count,
+            "one_match_count": one_match_count,
+            "multi_match_count": multi_match_count,
+            "average_matches_per_entity": round(avg_matches, 5),
             "entities_with_false_positives": entities_with_fp,
             "entities_with_false_negatives": entities_with_fn,
+            "empty_gt_count": empty_gt_count,
             "per_entity_records": per_entity_records,
         }
 
@@ -257,3 +270,27 @@ class EntityEvaluator:
             f"Exact Match Rate={exact_match_rate:.4f}"
         )
         return results
+
+
+def f05_score(true_set: Any, pred_set: Any) -> float:
+    """Canonical single-entity F0.5 score matching Anmol's authoritative signature."""
+    gt = parse_id_set(true_set)
+    pred = parse_id_set(pred_set)
+    res = compute_single_entity_metrics(gt, pred, beta=0.5)
+    return res["f_0.5"]
+
+
+def compute_macro_f05(y_true: Dict[str, Any], y_pred: Dict[str, Any], all_s1_ids: Optional[Any] = None) -> Dict[str, Any]:
+    """Computes competition Macro F0.5 across all Source 1 entities."""
+    evaluator = EntityEvaluator(beta=0.5)
+    return evaluator.evaluate(y_true, y_pred, all_s1_ids=all_s1_ids)
+
+
+__all__ = [
+    "EntityEvaluator",
+    "compute_f_beta",
+    "compute_single_entity_metrics",
+    "parse_id_set",
+    "f05_score",
+    "compute_macro_f05",
+]

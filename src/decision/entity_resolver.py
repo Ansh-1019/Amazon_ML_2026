@@ -248,13 +248,17 @@ class EntityResolver:
         """
         target_cols = [
             c for c in df.columns
-            if c in ("s2_id", "s3_id", "target_id", "candidate_id", "matched_id")
+            if c in ("s2_id", "s3_id", "target_id", "candidate_entity_id", "candidate_id", "matched_id")
         ]
 
         if not target_cols:
             return pd.DataFrame()
 
-        score_col = "match_score" if "match_score" in df.columns else None
+        score_col = None
+        for sc in ("match_score", "probability", "score"):
+            if sc in df.columns:
+                score_col = sc
+                break
 
         rows = []
         for _, row in df.iterrows():
@@ -262,13 +266,17 @@ class EntityResolver:
             if not s1_val or s1_val in ("nan", "None"):
                 continue
             score = float(row[score_col]) if score_col and pd.notna(row.get(score_col)) else 0.0
+            src_val = str(row.get("source", row.get("target_source", ""))).strip() if "source" in row or "target_source" in row else None
             for tc in target_cols:
                 if tc not in row or pd.isna(row[tc]):
                     continue
                 tid = str(row[tc]).strip().strip("\"'")
                 if not tid or tid in ("nan", "None"):
                     continue
-                rows.append({s1_col: s1_val, "target_id": tid, "match_score": score})
+                entry = {"s1_id": s1_val, "target_id": tid, "match_score": score}
+                if src_val:
+                    entry["source"] = src_val
+                rows.append(entry)
 
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
