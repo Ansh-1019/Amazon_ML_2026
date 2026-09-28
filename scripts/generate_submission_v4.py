@@ -105,7 +105,7 @@ class MultiSignalBlocker:
         self._name_idx: Dict[str, array.array] = {}
         self._addr_idx: Dict[str, array.array] = {}
         self._num_idx:  Dict[str, array.array] = {}
-        self._country_idx: Dict[str, Set[str]] = defaultdict(set)
+        self._country_idx: Dict[str, Set[int]] = defaultdict(set)
 
     def _register(self, eid: str) -> int:
         if eid not in self._id_to_int:
@@ -126,7 +126,7 @@ class MultiSignalBlocker:
             uid = self._register(eid)
             c = _clean(rec.get("country", ""))
             if c:
-                self._country_idx[c].add(eid)
+                self._country_idx[c].add(uid)
             for t in _name_tokens(rec.get("name", "")):
                 name_raw[t].append(uid)
             for t in _addr_tokens(rec.get("address", "")):
@@ -168,8 +168,8 @@ class MultiSignalBlocker:
             return []
         if s1_country and s1_country in self._country_idx:
             same_ctry = self._country_idx[s1_country]
-            for uid, eid in enumerate(self._int_to_id):
-                if uid in scores and eid in same_ctry:
+            for uid in scores:
+                if uid in same_ctry:
                     scores[uid] += 1.0
 
         top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
@@ -251,10 +251,10 @@ def main() -> None:
     parser.add_argument("--test-dir",    default="data/raw/dataset/test")
     parser.add_argument("--model-dir",   default="models/v4")
     parser.add_argument("--top-k",       type=int,   default=35)
-    parser.add_argument("--theta-min",   type=float, default=0.76,  help="Minimum probability to predict a match")
+    parser.add_argument("--theta-min",   type=float, default=None,  help="Minimum probability to predict a match (defaults to optimal threshold from training summary)")
     parser.add_argument("--delta-p",     type=float, default=0.15,  help="Max prob drop below top candidate")
     parser.add_argument("--max-k",       type=int,   default=6,     help="Max matches per S1 entity")
-    parser.add_argument("--chunk-size",  type=int,   default=50_000)
+    parser.add_argument("--chunk-size",  type=int,   default=10_000, help="Chunk size for RAM efficiency on 8GB machines")
     parser.add_argument("--output",      default="output/matching_results_v4.tsv")
     args = parser.parse_args()
 
@@ -268,7 +268,7 @@ def main() -> None:
     with open(model_dir / "training_summary_v4.json") as f:
         summary = json.load(f)
     weights   = summary["ensemble_weights"]
-    threshold = summary["ensemble_threshold"]
+    threshold = args.theta_min if args.theta_min is not None else summary.get("ensemble_threshold", 0.80)
     feature_names = get_feature_columns_v4()
     logger.info(f"Loaded config: weights={weights}, pair_threshold={threshold:.2f}")
 
@@ -373,7 +373,7 @@ def main() -> None:
                 cand_probs = s1_candidate_probs.get(s1_id, [])
                 matched = apply_decision_layer(
                     cand_probs,
-                    theta_min=args.theta_min,
+                    theta_min=threshold,
                     max_k=args.max_k,
                     delta_p=args.delta_p,
                 )

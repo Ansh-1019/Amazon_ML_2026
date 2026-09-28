@@ -145,8 +145,8 @@ class MultiSignalBlocker:
         self._name_idx: Dict[str, array.array] = {}
         self._addr_idx: Dict[str, array.array] = {}
         self._num_idx:  Dict[str, array.array] = {}
-        # Country index: country → set of entity_ids (small enough)
-        self._country_idx: Dict[str, Set[str]] = defaultdict(set)
+        # Country index: country → set of uint32 ids
+        self._country_idx: Dict[str, Set[int]] = defaultdict(set)
 
     def _register(self, eid: str) -> int:
         if eid not in self._id_to_int:
@@ -168,10 +168,10 @@ class MultiSignalBlocker:
 
         for eid, rec in entities.items():
             uid = self._register(eid)
-            # Country index (small, keep as set)
+            # Country index (small, keep as set of uids)
             c = _clean(rec.get("country", ""))
             if c:
-                self._country_idx[c].add(eid)
+                self._country_idx[c].add(uid)
             # Name tokens
             for t in _name_tokens(rec.get("name", "")):
                 name_raw[t].append(uid)
@@ -242,9 +242,9 @@ class MultiSignalBlocker:
 
         # Country boost (weight 1.0)
         if s1_country and s1_country in self._country_idx:
-            same_ctry_eids = self._country_idx[s1_country]
-            for uid, eid in enumerate(self._int_to_id):
-                if uid in scores and eid in same_ctry_eids:
+            same_ctry_uids = self._country_idx[s1_country]
+            for uid in scores:
+                if uid in same_ctry_uids:
                     scores[uid] += 1.0
 
         # Top-K
