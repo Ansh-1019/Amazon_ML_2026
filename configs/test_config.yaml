@@ -1,0 +1,50 @@
+project:
+  name: "Amazon ML Challenge 2026 - Entity Resolution (Test)"
+  experiment_id: "exp02_test"
+  seed: 42
+
+paths:
+  raw_data_dir: "data/raw/dataset/test"
+  processed_data_dir: "data/processed"
+  candidates_dir: "data/candidates"
+  models_dir: "models"
+  experiments_dir: "experiments"
+  submissions_dir: "output"
+
+data:
+  source1_filename: "test_source1.tsv"
+  source2_filename: "test_source2.tsv"
+  source3_filename: "test_source3.tsv"
+  train_matches_filename: "train_matches.tsv"
+  id_column: "entity_id"
+  id_column_s1: "entity_id"
+  id_column_s2: "entity_id"
+  id_column_s3: "entity_id"
+  name_column: "business_name"
+  address_column: "business_address"
+  country_column: "country"
+
+blocking:
+  top_k: 20
+  min_similarity_threshold: 0.1
+  blocking_fields: ["business_name", "business_address", "country"]
+
+features:
+  string_similarity_metrics: ["levenshtein", "jaccard", "cosine_tfidf"]
+
+modeling:
+  model_type: "lightgbm"
+  params:
+    random_seed: 42
+
+evaluation:
+  beta: 0.5
+
+decision:
+  threshold: 0.57
+
+submission:
+  matching_filename: "final_submission.tsv"
+  candidates_filename: "test_candidates.tsv"
+  enforce_s1_coverage: true
+  enforce_candidate_subset: true

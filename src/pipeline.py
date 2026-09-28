@@ -249,6 +249,27 @@ class EntityResolutionPipeline:
         
         self.feature_extractor = FeatureExtractor()
         self.model = model
+        if self.model is None:
+            models_dir = Path(self.config.get("paths", {}).get("models_dir", "models"))
+            model_path_cfg = self.config.get("modeling", {}).get("model_path")
+            cb_path = Path(model_path_cfg) if model_path_cfg else (models_dir / "catboost_model.cbm")
+            lgb_path = models_dir / "lightgbm_model.txt"
+            if cb_path.exists():
+                try:
+                    from catboost import CatBoostClassifier
+                    cb = CatBoostClassifier()
+                    cb.load_model(str(cb_path))
+                    self.model = cb
+                    self.logger.info(f"Loaded pre-trained CatBoost model artifact from: {cb_path}")
+                except Exception as e:
+                    self.logger.warning(f"Could not load CatBoost model: {e}")
+            elif lgb_path.exists():
+                try:
+                    import lightgbm as lgb
+                    self.model = lgb.Booster(model_file=str(lgb_path))
+                    self.logger.info(f"Loaded pre-trained LightGBM model artifact from: {lgb_path}")
+                except Exception as e:
+                    self.logger.warning(f"Could not load LightGBM model: {e}")
         
         dec_cfg = self.config.get("decision", {})
         self.resolver = EntityResolver(
