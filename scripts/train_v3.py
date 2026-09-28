@@ -40,7 +40,7 @@ from sklearn.model_selection import train_test_split
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.features.features_v3 import build_pair_features_v3, get_feature_columns
+from src.features.features_v3 import build_pair_features_v3, get_feature_columns_v3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -576,7 +576,7 @@ def main():
     logger.info(f"Extracting V2 features for {len(pairs_df):,} pairs...")
     t0 = time.time()
     
-    feature_names = get_feature_columns()
+    feature_names = get_feature_columns_v3()
     chunk_size = 50_000
     total_rows = len(pairs_df)
     
